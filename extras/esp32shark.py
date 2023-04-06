@@ -43,8 +43,8 @@ import re
 import serial.tools.list_ports
 
 serialport = ""
-# bpsRate = 921600
-bpsRate = 115200
+bpsRate = 9216000
+# bpsRate = 115200
 esp32_name = "WiFiPcap"
 docs_url = f"https://github.com/mhightower83/{esp32_name}"
 
@@ -79,9 +79,13 @@ def parseArgs():
 
        Examples:
 
-         {name} --filter_connection --ch=11
+         {name} --filter_session --ch=11
 
          {name} -c6 --filter_mask "mgmt|data"
+
+         {name} -c1 --filter_all
+
+         {name} -c6 --filter "mgmt|data" --oui "00:DD:00" --multicast
 
        These mnemonics represent filter options offered by the ESP32 SDK.
        Join these mnemonics with '|' to construct a FILTER_MASK:
@@ -129,16 +133,22 @@ def parseArgs():
     parser.add_argument('--zc', dest='channel', type=int, choices=range(1, 15), required=False, default=None, help=argparse.SUPPRESS)   # debug
     parser.add_argument('--testing', '--test', '-t', action='store_true', default=None, help=argparse.SUPPRESS)     # debug - skips starting Wireshark
 
+
     group2 = parser.add_mutually_exclusive_group(required=False)
     group2.add_argument('--mac', '-m', required=False, default=None, help=f'MAC, 6 bytes of Source or Destination Address of interest in quotes with "-" or ":" separator')
     group2.add_argument('--oui', '-o', required=False, default=None, help=f'OUI, first 3 bytes of Source or Destination Address of interest in quotes with "-" or ":" separator')
-    parser.add_argument('--multicast', '-u', required=False, default=None, help=f'Use with --mac or --oui to capture a multicast response. First 3 or 6 bytes of a Multicst Address in quotes with "-" or ":" separator. For a 3 byte value pad with zeros to 6 bytes.')
+    group2.add_argument('--no_mac', dest='mac', nargs='?', required=False, default=None, const="00:00:00:00:00:00", help=f'Clear MAC/OUI filter option')
+
+    group3 = parser.add_mutually_exclusive_group(required=False)
+    group3.add_argument('--multicast', '-u', nargs='?', action='store', required=False, default=None, const="01:00:00:00:00:00", help=f'Use with --mac or --oui to capture multicast responses. First 3 or 6 bytes of a Multicst Address in quotes with "-" or ":" separator. For a 3 byte value pad with zeros to 6 bytes.')
+    group3.add_argument('--broadcast', '-b', dest='multicast', nargs='?', action='store', required=False, default=None, const="FF:FF:FF:FF:FF:FF", help=f'Use with --mac or --oui to capture broadcast responses.')
+
 
     group = parser.add_mutually_exclusive_group(required=False)
-    group.add_argument('--filter_mask', '-f', required=False, default=None, help='Specify WiFi filter mask. See example and mnemonic list below.')
+    group.add_argument('--filter_mask', '-f', '--filter', required=False, default=None, help='Specify WiFi filter mask. See example and mnemonic list below.')
     group.add_argument('--filter_all', '-a', action='store_true', default=None, help='Capture all packets possible includes type control')
     # This one should be the default
-    group.add_argument('--filter_connection', action='store_true', default=None, help='Capture AP connection and Data related packets')
+    group.add_argument('--filter_session', action='store_true', default=None, help='Capture AP connection and Data related packets')
     return parser.parse_args()
     # ref epilog, https://stackoverflow.com/a/50021771
     # ref nargs='*'', https://stackoverflow.com/a/4480202
@@ -150,9 +160,6 @@ def parseArgs():
     # group.add_argument('--preferences_env', nargs='?', action='store', type=check_env, const="ARDUINO15_PREFERENCES_FILE", help=argparse.SUPPRESS)
 
 
-# Word usage - The common meaning of "filter" is to remove impurities.
-# In our usage here, we specify what to keep, a pass filter.
-#
 def processFilter(filter_str, filter_all, filter_connection):
     """
     These values are based on "./esp32s3/include/esp_wifi/include/esp_wifi_types.h"
@@ -283,10 +290,6 @@ def connectESP32(port, channel, filter, mac, multicast, time_sync):
             canBreak = True
         except KeyboardInterrupt:
             return None
-        # except:
-        #     print("[!] Serial connection failed! Retrying ...")
-        #     time.sleep(3)
-        #     continue
         except:
             print(f'[!] Serial port "{port}" open attempt failed!')
             return None
@@ -302,7 +305,7 @@ def connectESP32(port, channel, filter, mac, multicast, time_sync):
             print("[!] Serial port connection closed/failed while reading port!")
             return None
 
-        print(f'[+] ESP32 -> "{line.decode()[:-1]}"')
+        print(f'[>] ESP32 -> "{line.decode()[:-1]}"')
         if b"<<SerialPcap>>" in line:
             print("[+] Uploading options ...")
             break
@@ -312,19 +315,17 @@ def connectESP32(port, channel, filter, mac, multicast, time_sync):
         str += f'C{channel}'
 
     if filter:
-        # It is easier to break a 32-bit unsigned into 16 bit chunchs for the
-        # Arduino Serial.parseInt() method than add more code to parse a
-        # unsigned or hex value. Maybe later.
         val = 0x0FFFF & (filter >> 16)
         str += f'F{val}'
         val = 0x0FFFF & filter
         str += f'f{val}'
-        # str += f'F{filter:#08x}'
 
     if mac:
         str += f'M{mac[0]}m{mac[1]}'
         if multicast:
             str += f'U{multicast[0]}u{multicast[1]}'
+        else:
+            str += f'U0u0'
 
     if time_sync:
         now = time.time_ns()    # returns time as an integer number of nanoseconds since the epoch
@@ -338,7 +339,7 @@ def connectESP32(port, channel, filter, mac, multicast, time_sync):
     cmd = str.encode()
     fd.write(cmd)
     fd.flush()
-    print("[+] ESP32 <- {}".format(cmd))
+    print("[<] ESP32 <- {}".format(cmd))
     print("[+] Stream started ...")
     return fd
 
@@ -352,17 +353,19 @@ def runWireshark(fd):
 
 def processMac(mac, oui):
     if mac:
-        if len(mac) < 11:
-            # print(f'[!] Bad MAC Address formatting: "{mac}". Address ignored."')
-            return None
-
         addr = re.split(':|,|-|\.| ', mac)
+        if 6 != len(addr):
+            print(f'[!] Bad formatting "{mac}" should be 6 bytes long')
+            raise Exception(f'Bad address formatting')
+            return [0, 0]
         msb = int(addr[0], 16)*(256*256) + int(addr[1], 16)*256 + int(addr[2], 16)
         lsb = int(addr[3], 16)*(256*256) + int(addr[4], 16)*256 + int(addr[5], 16)
     elif oui:
-        if len(oui) < 5:
-            return None
         addr = re.split(':|,|-|\.| ', oui)
+        if 3 != len(addr):
+            print(f'[!] Bad formatting "{oui}" should be 3 bytes long')
+            raise Exception(f'Bad address formatting')
+            return [0, 0]
         msb = int(addr[0], 16)*(256*256) + int(addr[1], 16)*256 + int(addr[2], 16)
         lsb = 0
     else:
@@ -376,15 +379,9 @@ def main():
 
     try:
         args = parseArgs()
-    except:
-        return 0
-
-    mac = processMac(args.mac, args.oui)
-
-    multicast = processMac(args.multicast, None)
-
-    try:
-        filter = processFilter(args.filter_mask, args.filter_all, args.filter_connection)
+        mac = processMac(args.mac, args.oui)
+        multicast = processMac(args.multicast, None)
+        filter = processFilter(args.filter_mask, args.filter_all, args.filter_session)
     except:
         print("[+] Exiting ...")
         return 1
@@ -406,8 +403,8 @@ def main():
 
     if mac:
         print(f'[+] --mac="{mac}"')
-    elif oui:
-        print(f'[+] --oui="{oui}"')
+    # elif oui:
+    #     print(f'[+] --oui="{oui}"')
 
     if multicast:
         print(f'[+] --multicast="{multicast}"')

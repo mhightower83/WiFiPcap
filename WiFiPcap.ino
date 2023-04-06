@@ -251,6 +251,9 @@ OneButton button1(PIN_BUTTON_1, true);
 OneButton button2(PIN_BUTTON_2, true);
 #endif
 
+/*
+  Filter selection is now configurable. See "struct WiFiPSession"
+  Keep as block comment to document selection options for filter and ctrl_filter.
 
 #if USE_WIFIPCAP_FILTER_AP_SESSION
 constexpr wifi_promiscuous_filter_t filter = {
@@ -291,16 +294,17 @@ constexpr wifi_promiscuous_filter_t ctrl_filter = {
     0
 };
 #endif
-
+*/
 
 constexpr uint32_t kIntervalUpdate = 1000u;
 
-__NOINIT_ATTR struct WiFiPSession {
+struct WiFiPSession {
     uint32_t channel;
     wifi_promiscuous_filter_t filter;
     wifi_promiscuous_filter_t ctrl_filter;
     uint32_t lastScreenUpdate;
-} ws;
+};
+WiFiPSession __NOINIT_ATTR ws;
 
 struct ChannelStats {
     uint64_t mgmt  = 0;
@@ -581,6 +585,22 @@ static void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t eve
   }
 }
 
+bool is_mem_safe(void) {
+    // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/misc_system_api.html#_CPPv416esp_reset_reasonv
+    switch (esp_reset_reason())
+    {
+      case ESP_RST_POWERON:
+      case ESP_RST_BROWNOUT:
+      case ESP_RST_DEEPSLEEP:
+      case ESP_RST_UNKNOWN:
+          return false;
+
+      default:
+          break;
+    }
+    return true;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 void setup() {
@@ -605,6 +625,24 @@ void setup() {
 
     HWSerial.begin(115200);
     HWSerial.printf("\nHWSerial is working!!!\n");
+
+    bool init_custom_filter = true;
+    if (is_mem_safe() &&
+        ws.channel == limitChannel(ws.channel) &&
+        0 == (ws.ctrl_filter.filter_mask & ~WIFI_PROMIS_CTRL_FILTER_MASK_ALL) ) {
+        // Use existing settings
+        //?? Do we need more validation
+        init_custom_filter = false;
+    } else {
+        // Intialize noinit structure
+        ws.channel = limitChannel(CONFIG_WIFIPCAP_CHANNEL);
+        ws.filter.filter_mask = (USE_WIFIPCAP_FILTER_AP_SESSION) ?
+            (WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA) : 0u;
+        ws.ctrl_filter.filter_mask = 0u;
+        ws.lastScreenUpdate = 0u;
+    }
+    ws.lastScreenUpdate =  millis() - kIntervalUpdate;  // Force update event on first loop().
+
 
 #if USE_USB_MSC
     // Interfacing to the SD card in the T-Dongle-S3 plug.
@@ -681,15 +719,7 @@ void setup() {
     screen.on = true;
 #endif //  USE_DISPLAY
 
-#ifdef CONFIG_WIFIPCAP_CHANNEL
-    ws.channel = limitChannel(CONFIG_WIFIPCAP_CHANNEL);
-#else
-    ws.channel = limitChannel(ws.channel);  // validate value in noinit structure
-#endif
-
     wifi_promis_init();
-
-    ws.lastScreenUpdate =  millis() - kIntervalUpdate;  // Force update event on first loop().
 
 #ifdef PIN_BUTTON_1
     button1.attachClick([]() { nextChannel(); });
@@ -705,7 +735,7 @@ void setup() {
       setTxBuffer after begin with HWCDC and before for HardwareSerial
     */
     USBSerial.printf("Start serial pcap\n\n");
-    serial_pcap_start(&USBSerial);
+    serial_pcap_start(&USBSerial, init_custom_filter);
 }
 
 void userIO() {

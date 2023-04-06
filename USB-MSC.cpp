@@ -65,13 +65,14 @@ void sd_init(void) {
            Setting this field to 0 will result in allocation unit set to the
            sector size.
         */
-        .allocation_unit_size = 16 * 1024 // Based on the above, this is a bit large
+        //+ .allocation_unit_size = 16 * 1024 // Based on the above, this is a bit large
+        .allocation_unit_size = 0 // Based on the above, this is a bit large
     };
     /*
       sdmmc_host_t structure initializer for SDMMC peripheral
 
       Uses SDMMC peripheral, with 4-bit mode enabled, and max frequency set to default 20MHz.
-      A lot this is from SDMMC_HOST_DEFAULT in sdmmc_host.h; however, .flags is different.
+      A lot of this is from SDMMC_HOST_DEFAULT in sdmmc_host.h; however, .flags is different.
     */
     sdmmc_host_t host = {
         .flags = SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_DDR,
@@ -160,6 +161,7 @@ static bool onStartStop(uint8_t power_condition, bool start, bool load_eject) {
     return true;
 }
 
+#if 0
 /*
   General USB event handling
 
@@ -188,6 +190,7 @@ static void usbEventCallback(void *arg, esp_event_base_t event_base, int32_t eve
         }
     }
 }
+#endif
 
 void setupMsc() {
     // Device presented to the PC's USB connection

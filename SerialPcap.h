@@ -133,7 +133,7 @@ struct WiFiPcap {  // Object to place on queue
 } STRUCT_PACKED;
 
 
-esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial);
+esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter);
 
 esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type);
 

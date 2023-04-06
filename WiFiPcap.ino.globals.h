@@ -17,13 +17,13 @@
 // -DUSE_USB_MSC=0
 
 
-// -DARDUINO_LILYGO_T_DONGLE_S3=1
-// // This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
-// // This must point into you Sketch folder ./src/T-Dongle-S3/
-// -I"/home/mhightow/Arduino/ESPs/WiFiPcap/src/T-Dongle-S3/"
+-DARDUINO_LILYGO_T_DONGLE_S3=1
+// This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
+// This must point into you Sketch folder ./src/T-Dongle-S3/
+-I"/home/mhightow/Arduino/ESPs/WiFiPcap/src/T-Dongle-S3/"
 // -DUSE_USB_MSC=1
-// // Has hardware support, but with the current Arduino Core USB is unstable with this option
-// // -DUSE_USB_MSC=0
+// Has hardware support, but with the current Arduino Core USB is unstable with this option
+-DUSE_USB_MSC=0
 
 
 // Remove development phase informative prints

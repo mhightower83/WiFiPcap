@@ -54,40 +54,7 @@ extern "C" {
 #define USCLOCK32_ROLLOVER_SECONDS              (4294)    // 2^^32
 #define USCLOCK32_ROLLOVER_MICROSECONDS         (967296)
 
-  // TODO: Combine is_running and need_resync into a state variable include dtr
-  /*
-    rts - don't care
 
-    is_running = Task is running
-    need_resync - needs to send PCAP File Header
-    dtr - connected state
-
-  enum {
-  0b is_running, need_resync, dtr
-  0b0X0  Task not running - Idle0 => waitconnect
-  0b0X1  "                  Idle1 => syncing
-  0b010  "                  Idle2 => waitconnect
-  0b011  "                  Idle3 => syncing
-  0b100  Task running, Ready, Not connected --> move to 110 -                disconnect => waitconnect
-  0b101  Task running, Ready, Connected     --> PCAP transfer mode -         stream =>
-  0b110  Task running, Wait for connect, Not connected  --> Wait for DTR -   waitconnect => syncing
-  0b111  Task running, Need to Sync with host, Connected   --> Send Sync message to host wait, repeat - syncing => stream
-
-  State transitions
-
-  Idle => disconnect, wait4host0, wait4host1                outside task
-
-  disconnect(0b100) => waitconnect(0b110)                   within task
-
-  waitconnect(0b110) => syncing(0b111)                      outside task
-
-  syncing(0b111) => stream(0b101)                           within task
-
-  stream => disconnect(lost DTR) set resync, syncing (on send TO) set resync, outside task
-
-}
-
-  */
 struct TaskState {
     uint32_t is_running:1;
     uint32_t need_resync:1;
@@ -102,18 +69,17 @@ union UTaskState {
 };
 
 
-
 struct CustomFilters {
-    bool badpkt = false;
-    bool fcslen = false;
-    bool session = (USE_WIFIPCAP_FILTER_AP_SESSION) ? true : false;
-    size_t mcastlen = 0;
-    MacAddr mcast;  // Multicast Address
-    size_t moilen = 0u;
-    MacAddr moi;  // MAC Address Of Interest
+    bool badpkt;
+    bool fcslen;
+    bool session;
+    size_t mcastlen; // 0, 3, or 6
+    MacAddr mcast;   // Multicast Address
+    size_t moilen;   // 0 == None, 3 == OUI, 6 == MAC
+    MacAddr moi;     // MAC Address Of Interest
 };
 
-CustomFilters cust_fltr;
+CustomFilters __NOINIT_ATTR cust_fltr;
 
 struct SerialTask {
     TaskState volatile state;
@@ -200,7 +166,11 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
     }
     if (! *session->pcapSerial) {
         //?? I thought this use to work and now it does not ??
-        // There might be a bug in USBCDC,cpp
+        // There might be a bug in USBCDC.cpp
+        // See comments for serial_pcap_notifyDtrRts(). This maybe an issue with
+        // the wierd rts/dtr reset & flash programming option. Which never
+        // worked to me.
+        //
         // We now rely on state.b.dtr as ready indicator
         ESP_LOGI(TAG, "Host status DTR: %s, %sUSBSerial", (state.b.dtr) ? "HIGH" : "LOW", (*session->pcapSerial) ? "" : "!");
     }
@@ -210,6 +180,8 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
     while (0 < session->pcapSerial->available()) session->pcapSerial->read();
 
     ESP_LOGI(TAG, "Say Hello to Host");
+    // Be helpful, tell them where to download the script from
+    session->pcapSerial->printf("\nUse with script:\n  https://raw.githubusercontent.com/mhightower83/WiFiPcap/dev/extras/esp32shark.py\n");
     // First, say Hello to the python script
     session->pcapSerial->printf("Default Channel: %u, <<SerialPcap>>\n", getChannel());
 
@@ -255,7 +227,7 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
         cust_fltr.moi.mac[1] = (uint8_t)(mac >> 8);
         cust_fltr.moi.mac[2] = (uint8_t)mac;
         cust_fltr.moilen = 0;
-        if (mac) cust_fltr.moilen = 3u;
+        if (mac > 0) cust_fltr.moilen = 3u;
         c = session->pcapSerial->read();
     }
     if ('m' ==  c) {
@@ -263,7 +235,7 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
         cust_fltr.moi.mac[3] = (uint8_t)(mac >> 16);
         cust_fltr.moi.mac[4] = (uint8_t)(mac >> 8);
         cust_fltr.moi.mac[5] = (uint8_t)mac;
-        if (mac && cust_fltr.moilen) cust_fltr.moilen += 3u;
+        if (mac > 0 && cust_fltr.moilen) cust_fltr.moilen += 3u;
         c = session->pcapSerial->read();
     }
     if ('U' == c) {
@@ -273,7 +245,11 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
         cust_fltr.mcast.mac[1] = (uint8_t)(mac >> 8);
         cust_fltr.mcast.mac[2] = (uint8_t)mac;
         cust_fltr.mcastlen = 0;
-        if (mac) cust_fltr.mcastlen = 3u;
+        if (1 == mac) {
+            // Pass all multicast packets
+            cust_fltr.mcastlen = 1u;
+        } else
+        if (mac > 0) cust_fltr.mcastlen = 3u;
         c = session->pcapSerial->read();
     }
     if ('u' == c) {
@@ -282,7 +258,7 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
         cust_fltr.mcast.mac[3] = (uint8_t)(mac >> 16);
         cust_fltr.mcast.mac[4] = (uint8_t)(mac >> 8);
         cust_fltr.mcast.mac[5] = (uint8_t)mac;
-        if (mac && cust_fltr.moilen) cust_fltr.moilen += 3u;
+        if (mac > 0 && 3 == cust_fltr.moilen) cust_fltr.moilen += 3u;
         c = session->pcapSerial->read();
     }
     if ('G' == c) {
@@ -302,11 +278,21 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
         ESP_LOGE(TAG, "Starting PCAP Serial w/o go command.");
     }
     ESP_LOGI(TAG, "Host Sync Complete");
-    // ESP_LOGE(TAG, "Channel: %u, filter: 0x%08X.", channel, filter);
+    // TODO: Refactor config exchange for "retry config" instead of "just start
+    // anyway" Most of the order sensitivity can easyly be relaxed as well by
+    // putting test in a loop. However, major values will need to be set before
+    // minor values and 'G'/'g' will need to be last.
 
-    cust_fltr.badpkt = (0 != (WIFI_PROMIS_FILTER_MASK_FCSFAIL & filter));
-    cust_fltr.fcslen = (0 != (k_filter_custom_fcslen & filter));
-    cust_fltr.session = (0 != (k_filter_custom_session & filter));
+    // ESP_LOGE(TAG, "Channel: %u, filter: 0x%08X.", channel, filter);
+    // Carry forward previous filter
+    if (filter) {
+        cust_fltr.badpkt = (0 != (WIFI_PROMIS_FILTER_MASK_FCSFAIL & filter));
+        cust_fltr.fcslen = (0 != (k_filter_custom_fcslen & filter));
+        cust_fltr.session = (0 != (k_filter_custom_session & filter));
+    }
+    if (0 == cust_fltr.moilen) {
+        cust_fltr.mcastlen = 0;
+    }
     if (cust_fltr.session) {
         filter |= WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;
     }
@@ -349,8 +335,8 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
 ////////////////////////////////////////////////////////////////////////////////
 //
 /*
-  to handshake through "reboot_enable"
-  For a resync,
+  to handshake through "reboot_enable" behavior in USBCDC.cpp
+  For a resync, host should
    1) drop DTR, event post disconnected advance to state  CDC_LINE_1
    2) drop RTS, back to state CDC_LINE_IDLE
 
@@ -520,6 +506,8 @@ static void serial_task(void *parameters) {
     while (pdTRUE == xQueueReceive(session->work_queue, &wpcap, WIFIPCAP_PROCESS_PACKET_TIMEOUT_MS)) {
         free(wpcap);
     }
+    // At this time, we never stop the task. So, this path is never taken.
+    // Re-evaluate atomics when/if this changes
     // QueueHandle_t work_queue = interlocked_read((volatile void**)&session->work_queue);
     // interlocked_write(&session->work_queue, NULL);
 
@@ -543,10 +531,10 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
     state.u32 = interlocked_read((volatile uint32_t*)&session->state);
     if (!state.b.is_running) return ESP_ERR_INVALID_STATE;
 
-    // Skip error state packets does this include with FCS Errors ??
+    // Skip error state packets - does this include with FCS Errors ??
     // rx_ctrl.rx_state is underdocumented. I assume it would be set for errors
     // other than fcsfail. Like runt packets, jumbo packets, DMA error, etc.
-    // When WIFI_PROMIS_FILTER_MASK_FCSFAIL set, we keep all bad packets.
+    // With WIFI_PROMIS_FILTER_MASK_FCSFAIL set, we keep all bad packets.
     if (cust_fltr.badpkt || 0 == snoop->rx_ctrl.rx_state) {
 
         // Apply prescreen filters
@@ -567,11 +555,20 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
             WiFiPktHdr *pkt = (WiFiPktHdr*)snoop->payload;
             do {
                 if (cust_fltr.mcastlen) {
-                    size_t len = cust_fltr.mcastlen;
-                    uint8_t *moi = cust_fltr.mcast.mac;
-                    if ((!pkt->fctl.toDS && 0 == memcmp(pkt->ra.mac,    moi, len)) ||
-                        ( pkt->fctl.toDS && 0 == memcmp(pkt->addr3.mac, moi, len))) {
-                        continue;
+                    if (1 == cust_fltr.mcastlen) {
+                        // Keep any broadcast response
+                        if ((!pkt->fctl.toDS && (1u & pkt->ra.mac[0])) ||
+                            ( pkt->fctl.toDS && (1u & pkt->addr3.mac[0])) ) {
+                            continue;
+                        }
+                    } else {
+                      // Keep selective broadcast
+                      size_t len = cust_fltr.mcastlen;
+                      uint8_t *moi = cust_fltr.mcast.mac;
+                      if ((!pkt->fctl.toDS && 0 == memcmp(pkt->ra.mac,    moi, len)) ||
+                          ( pkt->fctl.toDS && 0 == memcmp(pkt->addr3.mac, moi, len))) {
+                          continue;
+                      }
                     }
                 }
                 // By using 3 or 6 bytes, we switch from an OUI block to a full MAC address
@@ -640,8 +637,7 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
 /*
   setup captured packet queue and worker thread
 */
-esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial)
-{
+esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter) {
     SerialTask *session = &st;
 
     // if (session->is_running) return ESP_OK;
@@ -659,12 +655,14 @@ esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial)
     session->state.need_init = true;
     session->state.dtr = false;
     session->state.rts = false;
-    //
-    // cust_fltr.badpkt = false;
-    // cust_fltr.fcslen = false;
-    // cust_fltr.session = false;
-    // cust_fltr.multicast = 0;
-    // cust_fltr.moilen = 0;
+
+    if (init_custom_filter) {
+        cust_fltr.badpkt = false;
+        cust_fltr.fcslen = false;
+        cust_fltr.session = (USE_WIFIPCAP_FILTER_AP_SESSION) ? true : false;
+        cust_fltr.mcastlen = 0;
+        cust_fltr.moilen = 0;
+    }
 
     if (NULL == pcapSerial) {
         ESP_LOGE(TAG, "NULL Pcap Serial");
@@ -710,33 +708,5 @@ esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial)
 
     return ESP_FAIL;
 }
-
-// int cmdLoop(Print& oStream, char hotKey) {
-//     switch (hotKey) {
-//         case 'g':
-//         {
-//             int i = USBSerial.parseInt();
-//             if (i > 0) {
-//                 uint32_t seconds = i;
-//                 i = USBSerial.parseInt();
-//                 if (i > 0 && 1000000 > i) {
-//                     uint32_t microseconds = i;
-//                     serial_pcap_settime(seconds, microseconds);
-//                 }
-//             }
-//             break;
-//         }
-//
-//         default:
-//             break;
-//     }
-// }
-//
-// void serialClientLoop(void) {
-//     if (0 < USBSerial.available()) {
-//         char hotKey = USBSerial.read();
-//         cmdLoop(USBSerial, hotKey);
-//     }
-// }
 
 };

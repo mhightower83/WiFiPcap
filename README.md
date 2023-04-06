@@ -46,6 +46,22 @@ access to the builtin USB interface.
 * TFT_eSPI  - https://github.com/Bodmer/TFT_eSPI
 * OneButton - https://github.com/mathertel/OneButton
 
+## Usage
+Run the python script in `extras/` with `--help` for more information on how to use.
+
+## Known Issues, Behaviors, and Nuances
+
+* TFCard not supported at this time, -DUDB_MSC=1. It is not reliable. USB drive randomly disconnects.
+
+* Linux appears to drop key-strokes when the USB CDC is busy with Wireshark. Setting filters on the ESP32 side helps to a degree.
+
+* The dropped packet count is set to 0 when a new connection is made as indicated by DTR going high. It is normal to see some dropped packets counted during disconnect. While disconnected, the queuing of packet continues; however, without a host connection, they are cleared in the worker thread and are not counted as dropped.
+
+* Filtering:
+  * While in Promiscuous mode, a filters can be registered with the SDK
+  * Additionally at callback additional filtering can be applied, custom filters.
+  * Packets excluded by the SDK filter are not included in the Packet or "kps" count. In contrast, Packets excluded by the custom filter have already been counted before the processing begins.
+
 
 ## Using `build_opt.h` or `mkbuildoptglobals.py` with Arduino ESP32
 
