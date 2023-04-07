@@ -128,25 +128,10 @@ void reinit_serial(SerialTask *session) {
 // Of data pairs (eg. 'U' and 'u'), major value before minor . Major values are
 // in caps and minor in lower. Configuration is finished with a 'X' for execute.
 //
-size_t parseInt2Array(uint8_t* array, int32_t* mac, SerialTask *session) {
-    *mac = session->pcapSerial->parseInt();
-    if (0 >= *mac) {
-        array[0] = array[1] = array[2] = 0;
-        return 0;
-    }
-    array[0] = (uint8_t)(*mac >> 16);
-    array[1] = (uint8_t)(*mac >> 8);
-    array[2] = (uint8_t)*mac;
-    return 3u;
-}
 
-esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
-    ESP_LOGI(TAG, "Say Hello to Host");
-    // Be helpful, tell them where to download the script from
-    session->pcapSerial->printf("\nUse with script:\n  https://raw.githubusercontent.com/mhightower83/WiFiPcap/extras/esp32shark.py\n");
-    // TODO: Think about giving more information about the current configured
-    // settings or data collected.
-    session->pcapSerial->printf("\nCurrent settings:\n  Channel: %u\n", getChannel());
+void printSettings(SerialTask *session, const char *title) {
+    session->pcapSerial->printf("%s\n", title);
+    session->pcapSerial->printf("  Channel: %u\n", getChannel());
     session->pcapSerial->printf("  %s 0x%08X\n", "filter:", getFilter());
 
     if (cust_fltr.badpkt) session->pcapSerial->printf("  %s\n", "Keep WIFI_PROMIS_FILTER_MASK_FCSFAIL");
@@ -166,7 +151,24 @@ esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
             session->pcapSerial->printf(":%02X", cust_fltr.moi.mac[i]);
         session->pcapSerial->printf("'\n");
     }
-    //
+}
+
+size_t parseInt2Array(uint8_t* array, int32_t* mac, SerialTask *session) {
+    *mac = session->pcapSerial->parseInt();
+    if (0 >= *mac) {
+        array[0] = array[1] = array[2] = 0;
+        return 0;
+    }
+    array[0] = (uint8_t)(*mac >> 16);
+    array[1] = (uint8_t)(*mac >> 8);
+    array[2] = (uint8_t)*mac;
+    return 3u;
+}
+
+esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
+    ESP_LOGI(TAG, "Say Hello to Host");
+    // Be helpful, tell them where to download the script from
+    session->pcapSerial->printf("\nUse with script:\n  https://raw.githubusercontent.com/mhightower83/WiFiPcap/extras/esp32shark.py\n");
     // First, say Hello to the python script
     session->pcapSerial->printf("\n<<SerialPcap>>\n");
 
@@ -188,7 +190,7 @@ esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
     channel = getChannel();
     filter = 0;
     int c = session->pcapSerial->read();
-    for (; 'X' != c && 0 < c; c = session->pcapSerial->read()) {
+    for (; '\n' != c && 0 < c; c = session->pcapSerial->read()) {
         if ('C' ==  c) {
             int32_t val = session->pcapSerial->parseInt();
             if (0 < val && maxChannel >= val) channel = val;
@@ -235,30 +237,35 @@ esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
             } else {
                 ESP_LOGE(TAG, "Malformed Host time.");
             }
+        } else
+        if ('P' == c) {
+            printSettings(session, "Current Config Settings");
+        } else
+        if ('X' == c) {
+            // filter == 0, Carry forward previous filter
+            if (filter) {
+                cust_fltr.badpkt = (0 != (WIFI_PROMIS_FILTER_MASK_FCSFAIL & filter));
+                cust_fltr.fcslen = (0 != (k_filter_custom_fcslen & filter));
+                cust_fltr.session = (0 != (k_filter_custom_session & filter));
+            }
+            if (0 == cust_fltr.moilen) {
+                cust_fltr.mcastlen = 0;
+            }
+            if (cust_fltr.session) {
+                filter |= WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;
+            }
+            // remove custom bits - invalid SDK filter bit
+            filter &= ~(k_filter_custom_fcslen | k_filter_custom_session);
+            printSettings(session, "Final Config Settings");
+            session->pcapSerial->printf("<<PASSTHROUGH>>\n");
+            ESP_LOGI(TAG, "Host Sync Complete");
+            return ESP_OK;
         } else {
             ESP_LOGE(TAG, "Unkown config ID: '%c'", c);
         }
     }
-    if ('X' != c) {
-        ESP_LOGE(TAG, "Missing 'X' at the end of config");
-    }
-    ESP_LOGI(TAG, "Host Sync Complete");
-
-    // filter == 0, Carry forward previous filter
-    if (filter) {
-        cust_fltr.badpkt = (0 != (WIFI_PROMIS_FILTER_MASK_FCSFAIL & filter));
-        cust_fltr.fcslen = (0 != (k_filter_custom_fcslen & filter));
-        cust_fltr.session = (0 != (k_filter_custom_session & filter));
-    }
-    if (0 == cust_fltr.moilen) {
-        cust_fltr.mcastlen = 0;
-    }
-    if (cust_fltr.session) {
-        filter |= WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;
-    }
-    // remove custom bits - invalid SDK filter bit
-    filter &= ~(k_filter_custom_fcslen | k_filter_custom_session);
-    return ESP_OK;
+    ESP_LOGE(TAG, "Missing 'X' at the end of config");
+    return ESP_ERR_TIMEOUT;
 }
 
 

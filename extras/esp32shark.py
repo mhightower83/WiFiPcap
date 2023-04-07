@@ -310,7 +310,7 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
             print("[+] Uploading options ...")
             break
 
-    str = ""
+    str = "P"
     if channel:
         str += f'C{channel}'
 
@@ -340,6 +340,21 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
     fd.write(cmd)
     fd.flush()
     print("[<] ESP32 <- {}".format(cmd))
+
+    while True:
+        try:
+            line = fd.readline()
+        except KeyboardInterrupt:
+            return None
+        except:
+            print("[!] Serial port connection closed/failed while reading port!")
+            return None
+
+        print(f'[>] ESP32 -> "{line.decode()[:-1]}"')
+        if b"<<PASSTHROUGH>>" in line:
+            print("[+] Upload Complete ...")
+            break
+
     print("[+] Stream started ...")
     return fd
 
