@@ -73,7 +73,7 @@ struct CustomFilters {
     bool badpkt;
     bool fcslen;
     bool session;
-    size_t mcastlen; // 0, 3, or 6
+    size_t mcastlen; // 0, 1, 3, or 6
     MacAddr mcast;   // Multicast Address
     size_t moilen;   // 0 == None, 3 == OUI, 6 == MAC
     MacAddr moi;     // MAC Address Of Interest
@@ -123,6 +123,144 @@ void reinit_serial(SerialTask *session) {
   #endif
 #endif
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Of data pairs (eg. 'U' and 'u'), major value before minor . Major values are
+// in caps and minor in lower. Configuration is finished with a 'X' for execute.
+//
+size_t parseInt2Array(uint8_t* array, int32_t* mac, SerialTask *session) {
+    *mac = session->pcapSerial->parseInt();
+    if (0 >= *mac) {
+        array[0] = array[1] = array[2] = 0;
+        return 0;
+    }
+    array[0] = (uint8_t)(*mac >> 16);
+    array[1] = (uint8_t)(*mac >> 8);
+    array[2] = (uint8_t)*mac;
+    return 3u;
+}
+
+esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
+    ESP_LOGI(TAG, "Say Hello to Host");
+    // Be helpful, tell them where to download the script from
+    session->pcapSerial->printf("\nUse with script:\n  https://raw.githubusercontent.com/mhightower83/WiFiPcap/extras/esp32shark.py\n");
+    // TODO: Think about giving more information about the current configured
+    // settings or data collected.
+    session->pcapSerial->printf("\nCurrent settings:\n  Channel: %u\n", getChannel());
+    session->pcapSerial->printf("  %s 0x%08X\n", "filter:", getFilter());
+
+    if (cust_fltr.badpkt) session->pcapSerial->printf("  %s\n", "Keep WIFI_PROMIS_FILTER_MASK_FCSFAIL");
+    if (cust_fltr.fcslen) session->pcapSerial->printf("  %s\n", "k_filter_custom_fcslen");
+    if (cust_fltr.session) session->pcapSerial->printf("  %s\n", "k_filter_custom_session");
+    if (cust_fltr.mcastlen) {
+        session->pcapSerial->printf("  %s: '", "multicast");
+        session->pcapSerial->printf("%02X", cust_fltr.mcast.mac[0]);
+        for (size_t i = 1; i < cust_fltr.mcastlen; i++)
+            session->pcapSerial->printf(":%02X", cust_fltr.mcast.mac[i]);
+        session->pcapSerial->printf("'\n");
+    }
+    if (cust_fltr.moilen) {
+        session->pcapSerial->printf("  %s: '", "unicast");
+        session->pcapSerial->printf("%02X", cust_fltr.moi.mac[0]);
+        for (size_t i = 1; i < cust_fltr.moilen; i++)
+            session->pcapSerial->printf(":%02X", cust_fltr.moi.mac[i]);
+        session->pcapSerial->printf("'\n");
+    }
+    //
+    // First, say Hello to the python script
+    session->pcapSerial->printf("\n<<SerialPcap>>\n");
+
+    session->timeseconds = 0;
+    session->timemicroseconds = 0;
+    session->finish_host_time_sync = true;
+
+    ESP_LOGI(TAG, "Wait for Host Sync");
+    uint32_t start = millis();
+    while (0 >= session->pcapSerial->available()) {
+        uint32_t now = millis();
+        if (now - start > 500) {
+            ESP_LOGE(TAG, "Serial Read Timeout");
+            return ESP_ERR_TIMEOUT;
+        }
+        delay(1);
+    }
+
+    channel = getChannel();
+    filter = 0;
+    int c = session->pcapSerial->read();
+    for (; 'X' != c && 0 < c; c = session->pcapSerial->read()) {
+        if ('C' ==  c) {
+            int32_t val = session->pcapSerial->parseInt();
+            if (0 < val && maxChannel >= val) channel = val;
+        } else
+        if ('F' ==  c) {
+            filter = session->pcapSerial->parseInt();
+            filter <<= 16u;
+        } else
+        if ('f' ==  c) {
+            filter |= session->pcapSerial->parseInt();
+        } else
+        if ('U' ==  c) {  // Unicast
+            int32_t mac;
+            cust_fltr.moilen = parseInt2Array(&cust_fltr.moi.mac[0], &mac, session);
+        } else
+        if ('u' ==  c) {
+            int32_t mac;
+            size_t len = parseInt2Array(&cust_fltr.moi.mac[3], &mac, session);
+            if (cust_fltr.moilen) cust_fltr.moilen += len;
+        } else
+        if ('M' == c) {  // Multicast
+            int32_t mac;
+            size_t len = parseInt2Array(&cust_fltr.mcast.mac[0], &mac, session);
+            cust_fltr.mcastlen = ((1<<16) == mac) ? 1 : len; // 1, assume Pass all multicast packets
+        } else
+        if ('m' == c) {
+            int32_t mac;
+            size_t len = parseInt2Array(&cust_fltr.mcast.mac[3], &mac, session);
+            if (1 == cust_fltr.mcastlen && len) cust_fltr.mcastlen += 2;  // correct bad assumption
+            if (3 == cust_fltr.mcastlen) cust_fltr.mcastlen += len;
+        } else
+        if ('G' == c) {
+            int32_t i = session->pcapSerial->parseInt();
+            if (i > 0) {
+                session->timeseconds = i;
+            } else {
+                ESP_LOGE(TAG, "Missing Host time.");
+            }
+        } else
+        if ('g' == c) {
+            int32_t i = session->pcapSerial->parseInt();
+            if (i > 0 && 1000000u > i) {
+                session->timemicroseconds = i;
+            } else {
+                ESP_LOGE(TAG, "Malformed Host time.");
+            }
+        } else {
+            ESP_LOGE(TAG, "Unkown config ID: '%c'", c);
+        }
+    }
+    if ('X' != c) {
+        ESP_LOGE(TAG, "Missing 'X' at the end of config");
+    }
+    ESP_LOGI(TAG, "Host Sync Complete");
+
+    // filter == 0, Carry forward previous filter
+    if (filter) {
+        cust_fltr.badpkt = (0 != (WIFI_PROMIS_FILTER_MASK_FCSFAIL & filter));
+        cust_fltr.fcslen = (0 != (k_filter_custom_fcslen & filter));
+        cust_fltr.session = (0 != (k_filter_custom_session & filter));
+    }
+    if (0 == cust_fltr.moilen) {
+        cust_fltr.mcastlen = 0;
+    }
+    if (cust_fltr.session) {
+        filter |= WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;
+    }
+    // remove custom bits - invalid SDK filter bit
+    filter &= ~(k_filter_custom_fcslen | k_filter_custom_session);
+    return ESP_OK;
+}
+
 
 /*
   To access shared memory updates I use interlocked_read and
@@ -179,125 +317,14 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
     // Clear Serial RX FIFO
     while (0 < session->pcapSerial->available()) session->pcapSerial->read();
 
-    ESP_LOGI(TAG, "Say Hello to Host");
-    // Be helpful, tell them where to download the script from
-    session->pcapSerial->printf("\nUse with script:\n  https://raw.githubusercontent.com/mhightower83/WiFiPcap/extras/esp32shark.py\n");
-    // First, say Hello to the python script
-    session->pcapSerial->printf("Default Channel: %u, <<SerialPcap>>\n", getChannel());
+    int channel;
+    uint32_t filter;
+    // Poll host for the Promiscuous Configuration
+    if (ESP_OK != hostDialog(session, channel, filter)) {
+        // Host not ready
+        return ESP_FAIL;
+    }
 
-    // Wait for the go / set time string command from the python script
-    // Looking for string "G<seconds> <microseconds>" eg."G123456 123456\n"
-    session->timeseconds = 0;
-    session->timemicroseconds = 0;
-    session->finish_host_time_sync = true;
-
-    ESP_LOGI(TAG, "Wait for Host Sync");
-    uint32_t start = millis();
-    while (0 >= session->pcapSerial->available()) {
-        uint32_t now = millis();
-        if (now - start > 500) {
-            ESP_LOGE(TAG, "Serial Read Timeout");
-            break;
-        }
-        delay(1);
-    }
-    // Let read fail, handle the fallthrough timout
-    // Options must be in order C, F, f, G
-    // Only option G is required.
-    int c = session->pcapSerial->read();
-    int channel = getChannel();
-    uint32_t filter = 0;
-    if ('C' ==  c) {
-        int32_t val = session->pcapSerial->parseInt();
-        if (0 < val && maxChannel >= val) channel = val;
-        c = session->pcapSerial->read();
-    }
-    if ('F' ==  c) {
-        filter = session->pcapSerial->parseInt();
-        filter <<= 16u;
-        c = session->pcapSerial->read();
-    }
-    if ('f' ==  c) {
-        filter |= session->pcapSerial->parseInt();
-        c = session->pcapSerial->read();
-    }
-    if ('M' ==  c) {
-        uint32_t mac = session->pcapSerial->parseInt();
-        cust_fltr.moi.mac[0] = (uint8_t)(mac >> 16);
-        cust_fltr.moi.mac[1] = (uint8_t)(mac >> 8);
-        cust_fltr.moi.mac[2] = (uint8_t)mac;
-        cust_fltr.moilen = 0;
-        if (mac > 0) cust_fltr.moilen = 3u;
-        c = session->pcapSerial->read();
-    }
-    if ('m' ==  c) {
-        uint32_t mac = session->pcapSerial->parseInt();
-        cust_fltr.moi.mac[3] = (uint8_t)(mac >> 16);
-        cust_fltr.moi.mac[4] = (uint8_t)(mac >> 8);
-        cust_fltr.moi.mac[5] = (uint8_t)mac;
-        if (mac > 0 && cust_fltr.moilen) cust_fltr.moilen += 3u;
-        c = session->pcapSerial->read();
-    }
-    if ('U' == c) {
-        // cust_fltr.multicast = true;
-        uint32_t mac = session->pcapSerial->parseInt();
-        cust_fltr.mcast.mac[0] = (uint8_t)(mac >> 16);
-        cust_fltr.mcast.mac[1] = (uint8_t)(mac >> 8);
-        cust_fltr.mcast.mac[2] = (uint8_t)mac;
-        cust_fltr.mcastlen = 0;
-        if (1 == mac) {
-            // Pass all multicast packets
-            cust_fltr.mcastlen = 1u;
-        } else
-        if (mac > 0) cust_fltr.mcastlen = 3u;
-        c = session->pcapSerial->read();
-    }
-    if ('u' == c) {
-        // cust_fltr.multicast = true;
-        uint32_t mac = session->pcapSerial->parseInt();
-        cust_fltr.mcast.mac[3] = (uint8_t)(mac >> 16);
-        cust_fltr.mcast.mac[4] = (uint8_t)(mac >> 8);
-        cust_fltr.mcast.mac[5] = (uint8_t)mac;
-        if (mac > 0 && 3 == cust_fltr.moilen) cust_fltr.moilen += 3u;
-        c = session->pcapSerial->read();
-    }
-    if ('G' == c) {
-        int32_t i = session->pcapSerial->parseInt();
-        if (i > 0) {
-            session->timeseconds = i;
-            i = session->pcapSerial->parseInt();
-            if (i > 0 && 1000000u > i) {
-                session->timemicroseconds = i;
-            } else {
-                ESP_LOGE(TAG, "Malformed Host time.");
-            }
-        } else {
-            ESP_LOGE(TAG, "Missing Host time.");
-        }
-    } else {
-        ESP_LOGE(TAG, "Starting PCAP Serial w/o go command.");
-    }
-    ESP_LOGI(TAG, "Host Sync Complete");
-    // TODO: Refactor config exchange for "retry config" instead of "just start
-    // anyway" Most of the order sensitivity can easyly be relaxed as well by
-    // putting test in a loop. However, major values will need to be set before
-    // minor values and 'G'/'g' will need to be last.
-
-    // ESP_LOGE(TAG, "Channel: %u, filter: 0x%08X.", channel, filter);
-    // Carry forward previous filter
-    if (filter) {
-        cust_fltr.badpkt = (0 != (WIFI_PROMIS_FILTER_MASK_FCSFAIL & filter));
-        cust_fltr.fcslen = (0 != (k_filter_custom_fcslen & filter));
-        cust_fltr.session = (0 != (k_filter_custom_session & filter));
-    }
-    if (0 == cust_fltr.moilen) {
-        cust_fltr.mcastlen = 0;
-    }
-    if (cust_fltr.session) {
-        filter |= WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;
-    }
-    // remove custom bits - invalid SDK filter bit
-    filter &= ~(k_filter_custom_fcslen | k_filter_custom_session);
     begin_promiscuous(channel, filter, filter);
 
     // Write Pcap File header - About PCAP_MAGIC, The decoder will use it to
@@ -574,15 +601,41 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
                 // By using 3 or 6 bytes, we switch from an OUI block to a full MAC address
                 size_t len = cust_fltr.moilen;
                 uint8_t *moi = cust_fltr.moi.mac;
-                do {  // Log packet on interesting Source Address or Destination Address
-                    if (!pkt->fctl.toDS   && 0 == memcmp(pkt->ra.mac,    moi, len)) continue;
-                    if (!pkt->fctl.fromDS && 0 == memcmp(pkt->ta.mac,    moi, len)) continue;
-                    if ((pkt->fctl.toDS || pkt->fctl.fromDS)
-                                          && 0 == memcmp(pkt->addr3.mac, moi, len)) continue;
-                    if ( pkt->fctl.toDS && pkt->fctl.fromDS
-                                          && 0 == memcmp(pkt->addr4.mac, moi, len)) continue;
-                    return ESP_OK;
-                } while (false);
+                if (6 == len) {
+                    do {  // Log packet on interesting Source Address or Destination Address
+                        if (!pkt->fctl.toDS   && pkt->ra.mac[5] == moi[5] && 0 == memcmp(pkt->ra.mac, moi, 5)) continue;
+                        if (!pkt->fctl.fromDS && pkt->ta.mac[5] == moi[5] && 0 == memcmp(pkt->ta.mac, moi, 5)) continue;
+                        if ((pkt->fctl.toDS || pkt->fctl.fromDS)
+                                              && pkt->addr3.mac[5] == moi[5] && 0 == memcmp(pkt->addr3.mac, moi, 5)) continue;
+                        if ( pkt->fctl.toDS && pkt->fctl.fromDS
+                                              && pkt->addr4.mac[5] == moi[5] && 0 == memcmp(pkt->addr4.mac, moi, 5)) continue;
+                        return ESP_OK;
+                    } while (false);
+                } else
+                if (3 == len) {
+                    do {  // Log packet on interesting Source Address or Destination Address
+                        if (!pkt->fctl.toDS   && pkt->ra.mac[0] == moi[0] && pkt->ra.mac[1] == moi[1] && pkt->ra.mac[2] == moi[2] ) continue;
+                        if (!pkt->fctl.fromDS && pkt->ta.mac[0] == moi[0] && pkt->ta.mac[1] == moi[1] && pkt->ta.mac[2] == moi[2]) continue;
+                        if ((pkt->fctl.toDS || pkt->fctl.fromDS)
+                                              && pkt->addr3.mac[0] == moi[0] && pkt->addr3.mac[1] == moi[1] && pkt->addr3.mac[2] == moi[2]) continue;
+                        if ( pkt->fctl.toDS && pkt->fctl.fromDS
+                                              && pkt->addr4.mac[0] == moi[0] && pkt->addr4.mac[1] == moi[1] && pkt->addr4.mac[2] == moi[2]) continue;
+                        return ESP_OK;
+                    } while (false);
+                }
+#if 0
+                else if (len) {
+                    do {  // Log packet on interesting Source Address or Destination Address
+                        if (!pkt->fctl.toDS   && 0 == memcmp(pkt->ra.mac,    moi, len)) continue;
+                        if (!pkt->fctl.fromDS && 0 == memcmp(pkt->ta.mac,    moi, len)) continue;
+                        if ((pkt->fctl.toDS || pkt->fctl.fromDS)
+                                              && 0 == memcmp(pkt->addr3.mac, moi, len)) continue;
+                        if ( pkt->fctl.toDS && pkt->fctl.fromDS
+                                              && 0 == memcmp(pkt->addr4.mac, moi, len)) continue;
+                        return ESP_OK;
+                    } while (false);
+                }
+#endif
             } while (false);
         }
 
@@ -708,5 +761,8 @@ esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter) {
 
     return ESP_FAIL;
 }
+
+
+
 
 };

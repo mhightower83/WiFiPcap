@@ -120,7 +120,6 @@ void loop(){}
 #define USE_DISPLAY 0
 #define FLIP_DISPLAY 0
 #define USE_LED_CONTROL 0
-
 #endif
 
 // No splash images at this time.
@@ -141,7 +140,6 @@ void loop(){}
 
 #if ARDUINO_LILYGO_T_DISPLAY_S3
 #include "src/Free_Fonts.h"
-
 // The ARDUINO_LILYGO_T_DISPLAY_S3 module uses parallel for Display
 // Please make sure your touch IC model.
 #define TOUCH_MODULES_CST_MUTUAL // This is the correct Touch screen
@@ -153,11 +151,12 @@ void loop(){}
 #include "src/Free_Fonts.h"
 #include <SPI.h>
 #include <TFT_eSPI.h>
+
 #else
 #endif // ARDUINO_LILYGO_T_DISPLAY_S3
 
 
-#ifdef PIN_BUTTON_1
+#if defined(PIN_BUTTON_1) || defined(PIN_BUTTON_2)
 #include <OneButton.h>
 #endif
 
@@ -176,17 +175,16 @@ void loop(){}
 #include <nvs_flash.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
+#include <freertos/FreeRTOS.h>
 #include "SerialPcap.h"
 #include "WiFiPcap.h"
 #include "Interlocks.h"
+using namespace std;
 
 
 #if USE_USB_MSC
 #include "USB-MSC.h"
 #endif
-
-
-#include <freertos/FreeRTOS.h>
 
 
 #if USE_PREFERENCES
@@ -201,9 +199,6 @@ static const char *TAG = "WiFi";
 #undef ESP_LOGI
 #define ESP_LOGI(t, fmt, ...)
 #endif
-
-
-using namespace std;
 
 
 // Stuff for Builtin User Output and Input devices
@@ -327,6 +322,10 @@ size_t getChannel() {
     return ws.channel;
 }
 
+uint32_t getFilter() {
+    return ws.filter.filter_mask;
+}
+
 #pragma GCC push_options
 #pragma GCC optimize("Ofast")
 int not_the_one = 0;
@@ -440,7 +439,7 @@ inline uint32_t limitChannel(int c) {
 }
 
 
-void end_promiscuous() {
+static void end_promiscuous() {
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(false));
 }
 

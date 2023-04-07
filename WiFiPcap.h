@@ -50,7 +50,7 @@ constexpr uint8_t maxChannel = CONFIG_WIFIPCAP_CHANNEL_MAX; // Regional value
 constexpr uint32_t k_filter_custom_session = (1<<16);
 constexpr uint32_t k_filter_custom_fcslen = (1<<17);
 
-constexpr size_t k_pass_multicast_count = 16;
+//D constexpr size_t k_pass_multicast_count = 16;
 
 #define STRUCT_PACKED __attribute__((packed))
 
@@ -140,6 +140,7 @@ struct WiFiPktHdr {
 } STRUCT_PACKED;
 
 size_t getChannel();
+uint32_t getFilter();
 uint32_t begin_promiscuous(uint32_t c);
 uint32_t begin_promiscuous(uint32_t c, uint32_t filter, uint32_t ctrl_filter);
 

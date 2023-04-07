@@ -135,13 +135,13 @@ def parseArgs():
 
 
     group2 = parser.add_mutually_exclusive_group(required=False)
-    group2.add_argument('--mac', '-m', required=False, default=None, help=f'MAC, 6 bytes of Source or Destination Address of interest in quotes with "-" or ":" separator')
+    group2.add_argument('--unicast', '-u', '--mac', required=False, default=None, help=f'unicast/MAC, 6 bytes of Source or Destination Address of interest in quotes with "-" or ":" separator')
     group2.add_argument('--oui', '-o', required=False, default=None, help=f'OUI, first 3 bytes of Source or Destination Address of interest in quotes with "-" or ":" separator')
-    group2.add_argument('--no_mac', dest='mac', nargs='?', required=False, default=None, const="00:00:00:00:00:00", help=f'Clear MAC/OUI filter option')
+    group2.add_argument('--no_addr', dest='unicast', nargs='?', required=False, default=None, const="00:00:00:00:00:00", help=f'Clear Unicast/OUI filter option')
 
     group3 = parser.add_mutually_exclusive_group(required=False)
-    group3.add_argument('--multicast', '-u', nargs='?', action='store', required=False, default=None, const="01:00:00:00:00:00", help=f'Use with --mac or --oui to capture multicast responses. First 3 or 6 bytes of a Multicst Address in quotes with "-" or ":" separator. For a 3 byte value pad with zeros to 6 bytes.')
-    group3.add_argument('--broadcast', '-b', dest='multicast', nargs='?', action='store', required=False, default=None, const="FF:FF:FF:FF:FF:FF", help=f'Use with --mac or --oui to capture broadcast responses.')
+    group3.add_argument('--multicast', '-m', nargs='?', action='store', required=False, default=None, const="01:00:00:00:00:00", help=f'Use with --unicast or --oui to capture multicast responses. First 3 or 6 bytes of a Multicst Address in quotes with "-" or ":" separator. For a 3 byte value pad with zeros to 6 bytes.')
+    group3.add_argument('--broadcast', '-b', dest='multicast', nargs='?', action='store', required=False, default=None, const="FF:FF:FF:FF:FF:FF", help=f'Use with --unicast or --oui to capture broadcast responses.')
 
 
     group = parser.add_mutually_exclusive_group(required=False)
@@ -280,7 +280,7 @@ def pickPort():
     return serialport
 
 
-def connectESP32(port, channel, filter, mac, multicast, time_sync):
+def connectESP32(port, channel, filter, unicast, multicast, time_sync):
     global bpsRate
 
     canBreak = False
@@ -320,21 +320,21 @@ def connectESP32(port, channel, filter, mac, multicast, time_sync):
         val = 0x0FFFF & filter
         str += f'f{val}'
 
-    if mac:
-        str += f'M{mac[0]}m{mac[1]}'
+    if unicast:
+        str += f'U{unicast[0]}u{unicast[1]}'
         if multicast:
-            str += f'U{multicast[0]}u{multicast[1]}'
+            str += f'M{multicast[0]}m{multicast[1]}'
         else:
-            str += f'U0u0'
+            str += f'M0m0'
 
     if time_sync:
         now = time.time_ns()    # returns time as an integer number of nanoseconds since the epoch
         microseconds = round(now / 1000)
         seconds = int(microseconds / 1000000)
         microseconds %= 1000000
-        str += f'G{seconds} {microseconds}\n'
+        str += f'G{seconds}g{microseconds}X\n'
     else:
-        str += f'G\n'
+        str += f'X\n'
 
     cmd = str.encode()
     fd.write(cmd)
@@ -351,11 +351,12 @@ def runWireshark(fd):
     proc.communicate()
 
 
-def processMac(mac, oui):
-    if mac:
-        addr = re.split(':|,|-|\.| ', mac)
+def processAddress(unicast, oui):
+    # unicast parsing also works for multicast
+    if unicast:
+        addr = re.split(':|,|-|\.| ', unicast)
         if 6 != len(addr):
-            print(f'[!] Bad formatting "{mac}" should be 6 bytes long')
+            print(f'[!] Bad formatting "{unicast}" should be 6 bytes long')
             raise Exception(f'Bad address formatting')
             return [0, 0]
         msb = int(addr[0], 16)*(256*256) + int(addr[1], 16)*256 + int(addr[2], 16)
@@ -379,8 +380,8 @@ def main():
 
     try:
         args = parseArgs()
-        mac = processMac(args.mac, args.oui)
-        multicast = processMac(args.multicast, None)
+        unicast = processAddress(args.unicast, args.oui)
+        multicast = processAddress(args.multicast, None)
         filter = processFilter(args.filter_mask, args.filter_all, args.filter_session)
     except:
         print("[+] Exiting ...")
@@ -401,8 +402,8 @@ def main():
     else:
         print('[+] --filter_mask="None"')
 
-    if mac:
-        print(f'[+] --mac="{mac}"')
+    if unicast:
+        print(f'[+] --unicast="{unicast}"')
     # elif oui:
     #     print(f'[+] --oui="{oui}"')
 
@@ -412,7 +413,7 @@ def main():
     print(f'[+] set time="{args.time_sync}"')
     # sys.stdout.flush()
 
-    fd = connectESP32(port, args.channel, filter, mac, multicast, args.time_sync)
+    fd = connectESP32(port, args.channel, filter, unicast, multicast, args.time_sync)
     if None == fd:
         print("[+] Exiting ...")
         return 1
