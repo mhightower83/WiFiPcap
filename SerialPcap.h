@@ -66,6 +66,7 @@ extern "C" {
 #define STRUCT_PACKED __attribute__((packed))
 #endif
 
+constexpr uint32_t k_serial_timeout = 500u;  // ms
 
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
@@ -140,6 +141,8 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type);
 void serial_pcap_notifyDtrRts(bool dtr, bool rts);
 
 void reset_dropped_count(void);
+
+void buffer_802_1x_authentications(WiFiPcap *wpcap);
 
 #ifdef __cplusplus
 }

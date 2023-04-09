@@ -114,6 +114,7 @@ void reinit_serial(SerialTask *session) {
   // USBCDC
   if (*session->pcapSerial) session->pcapSerial->end();
   session->pcapSerial->begin();
+
   // USBCDC does not have a setTxBufferSize method.
 
   // For now, Hardware Serial is not supported
@@ -122,6 +123,7 @@ void reinit_serial(SerialTask *session) {
   session->pcapSerial->begin(CONFIG_WIFIPCAP_SERIAL_SPEED, SERIAL_8N1);
   #endif
 #endif
+  session->pcapSerial->setTimeout(k_serial_timeout);  // Stream wait for data
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -129,10 +131,10 @@ void reinit_serial(SerialTask *session) {
 // in caps and minor in lower. Configuration is finished with a 'X' for execute.
 //
 
-void printSettings(SerialTask *session, const char *title) {
+void printSettings(SerialTask *session, int channel, uint32_t filter, const char *title) {
     session->pcapSerial->printf("%s\n", title);
-    session->pcapSerial->printf("  Channel: %u\n", getChannel());
-    session->pcapSerial->printf("  %s 0x%08X\n", "filter:", getFilter());
+    session->pcapSerial->printf("  Channel: %u\n", channel);
+    session->pcapSerial->printf("  %s 0x%08X\n", "filter:", filter);
 
     if (cust_fltr.badpkt) session->pcapSerial->printf("  %s\n", "Keep WIFI_PROMIS_FILTER_MASK_FCSFAIL");
     if (cust_fltr.fcslen) session->pcapSerial->printf("  %s\n", "k_filter_custom_fcslen");
@@ -145,7 +147,8 @@ void printSettings(SerialTask *session, const char *title) {
         session->pcapSerial->printf("'\n");
     }
     if (cust_fltr.moilen) {
-        session->pcapSerial->printf("  %s: '", "unicast");
+        const char *ouimac = (3 == cust_fltr.moilen) ? "oui" : "unicast";
+        session->pcapSerial->printf("  %s: '", ouimac);
         session->pcapSerial->printf("%02X", cust_fltr.moi.mac[0]);
         for (size_t i = 1; i < cust_fltr.moilen; i++)
             session->pcapSerial->printf(":%02X", cust_fltr.moi.mac[i]);
@@ -180,15 +183,29 @@ esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
     uint32_t start = millis();
     while (0 >= session->pcapSerial->available()) {
         uint32_t now = millis();
-        if (now - start > 500) {
+        if (now - start > k_serial_timeout) {
             ESP_LOGE(TAG, "Serial Read Timeout");
             return ESP_ERR_TIMEOUT;
         }
         delay(1);
     }
 
+    /*
+     Configure Settings is sent as one line, ending with a '\n' character.
+     The string consist of a series of command/data identifiers finished with
+     the 'X' character which indicates the end of the settings list.
+     Each setting value, a base 10 number, will be identified by a leading
+     alpha-character. parseInt() will stop at the next alpha-charcter.
+     Thus, after each parsed initeger there will be the next command.
+
+     To deal with large values, most configure setting options are divided up
+     into a Major/Minor component. For proper reassembly, the Major component
+     must be received before the Minor. The case of the alpha command character
+     is used to differentiate between Major from Minor components. Upper case
+     is the Major.
+    */
     channel = getChannel();
-    filter = 0;
+    filter = getFilter();
     int c = session->pcapSerial->read();
     for (; '\n' != c && 0 < c; c = session->pcapSerial->read()) {
         if ('C' ==  c) {
@@ -196,11 +213,36 @@ esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
             if (0 < val && maxChannel >= val) channel = val;
         } else
         if ('F' ==  c) {
-            filter = session->pcapSerial->parseInt();
-            filter <<= 16u;
+            filter = 0;
+            int32_t val = session->pcapSerial->parseInt();
+            if (0 <= val) {
+                filter = ((uint32_t)val) << 16u;
+            } else {
+                session->pcapSerial->printf("parseInt() failed on ID '%c'", c);
+            }
         } else
         if ('f' ==  c) {
-            filter |= session->pcapSerial->parseInt();
+            int32_t val = session->pcapSerial->parseInt();
+            if (0 <= val) {
+                filter |= (uint32_t)val;
+            } else {
+                session->pcapSerial->printf("parseInt() failed on ID '%c'", c);
+            }
+        } else
+        if ('S' ==  c) {
+            uint32_t custom_filter = 0;
+            int32_t val = session->pcapSerial->parseInt();
+            if (0 <= val) {
+                custom_filter = ((uint32_t)val) << 16u;
+            } else {
+                session->pcapSerial->printf("parseInt() failed on ID '%c'", c);
+            }
+            cust_fltr.badpkt = (0 != (k_filter_custom_badpkt & custom_filter));
+            cust_fltr.fcslen = (0 != (k_filter_custom_fcslen & custom_filter));
+            // The script is responsible for appending these flags to "filter"
+            // for supporting the "session" option. "filter |=
+            //   WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;"
+            cust_fltr.session = (0 != (k_filter_custom_session & custom_filter));
         } else
         if ('U' ==  c) {  // Unicast
             int32_t mac;
@@ -239,29 +281,19 @@ esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
             }
         } else
         if ('P' == c) {
-            printSettings(session, "Current Config Settings");
+            printSettings(session, channel, filter, "Current Config Settings");
         } else
         if ('X' == c) {
-            // filter == 0, Carry forward previous filter
-            if (filter) {
-                cust_fltr.badpkt = (0 != (WIFI_PROMIS_FILTER_MASK_FCSFAIL & filter));
-                cust_fltr.fcslen = (0 != (k_filter_custom_fcslen & filter));
-                cust_fltr.session = (0 != (k_filter_custom_session & filter));
-            }
             if (0 == cust_fltr.moilen) {
                 cust_fltr.mcastlen = 0;
             }
-            if (cust_fltr.session) {
-                filter |= WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;
-            }
-            // remove custom bits - invalid SDK filter bit
-            filter &= ~(k_filter_custom_fcslen | k_filter_custom_session);
-            printSettings(session, "Final Config Settings");
+            printSettings(session, channel, filter, "Final Config Settings");
             session->pcapSerial->printf("<<PASSTHROUGH>>\n");
             ESP_LOGI(TAG, "Host Sync Complete");
             return ESP_OK;
         } else {
-            ESP_LOGE(TAG, "Unkown config ID: '%c'", c);
+            ESP_LOGE(TAG, "Unknown config ID: '%c'", c);
+            session->pcapSerial->printf("Unknown config ID: '%c' ignored", c);
         }
     }
     ESP_LOGE(TAG, "Missing 'X' at the end of config");
@@ -296,7 +328,7 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
         reinit_serial(session);
         union UTaskState old_state;
         do {
-            old_state.u32 = (uint32_t)interlocked_read((volatile uint32_t*)&session->state);
+            old_state.u32 = interlocked_read((volatile uint32_t*)&session->state);
             state = old_state;
             state.b.need_init = false;
         } while (false == interlocked_compare_exchange((volatile uint32_t*)&session->state, old_state.u32, state.u32));
@@ -475,12 +507,14 @@ static void serial_task(void *parameters) {
         bool need_resync = state.b.need_resync;
         while (need_resync) {
             if (wpcap) {
+                buffer_802_1x_authentications(wpcap);
                 free(wpcap);
                 wpcap = NULL;
             }
             need_resync = (ESP_OK != pcap_serial_start(session, PCAP_LINK_TYPE_802_11));
             // Clear queue so we can get time synced properly with host
             while (pdTRUE == xQueueReceive(session->work_queue, &wpcap, 0)) {
+                buffer_802_1x_authentications(wpcap);
                 free(wpcap);
             }
             wpcap = NULL;
@@ -499,6 +533,7 @@ static void serial_task(void *parameters) {
         if (NULL == wpcap) continue;
 
         pcap_time_sync(session, wpcap);
+        buffer_802_1x_authentications(wpcap);
 
         size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
         // We expect Serial.write() to block - don't expect to be exposed to stream timeout
@@ -557,6 +592,19 @@ static void serial_task(void *parameters) {
 //
 #pragma GCC push_options
 #pragma GCC optimize("Ofast")
+
+const uint8_t k_llc_snap_hdr[] = { 0xAAu, 0xAAu, 0x01u, 0x00, 0x00, 0x00 };
+void buffer_802_1x_authentications(WiFiPcap *wpcap) {
+    const WiFiPktHdr* const pkt = (WiFiPktHdr*)wpcap->payload;
+    // Rapid disqualifier
+    if (wpcap->pcap_header.capture_length <= (sizeof(LLC) + offsetof(struct WiFiPktHdr, llc))) return;
+    if (k_802_1x_authentication != pkt->llc.type) return;
+    if (0 != memcmp(&pkt->llc, k_llc_snap_hdr, sizeof(k_llc_snap_hdr))) return;
+    // TODO: Expand - buffer authenticate packets in PSRAM
+}
+
+
+
 esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
     wifi_promiscuous_pkt_t *snoop = (wifi_promiscuous_pkt_t *)recv_buf;
     SerialTask *session = &st;
@@ -570,23 +618,22 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
     // other than fcsfail. Like runt packets, jumbo packets, DMA error, etc.
     // With WIFI_PROMIS_FILTER_MASK_FCSFAIL set, we keep all bad packets.
     if (cust_fltr.badpkt || 0 == snoop->rx_ctrl.rx_state) {
-
+#if 1
+        const WiFiPktHdr* const pkt = (WiFiPktHdr*)snoop->payload;
         // Apply prescreen filters
         if (cust_fltr.session) {
-            const WiFiPktHdr* const wh = (WiFiPktHdr*)snoop->payload;
             // These seem to work for limiting capture of a TCP session
             // Note, while Wireshark is logging each side needs to authenticate
             // with the AP for decription to work.
-            if (WIFI_PKT_MGMT == type ) {
-                if (WLAN_FC_STYPE_BEACON     == wh->fctl.subtype) return ESP_OK;
-                if (WLAN_FC_STYPE_PROBE_REQ  == wh->fctl.subtype) return ESP_OK;
-                if (WLAN_FC_STYPE_PROBE_RESP == wh->fctl.subtype) return ESP_OK;
+            if (WIFI_PKT_MGMT == type) {
+                if (WLAN_FC_STYPE_BEACON     == pkt->fctl.subtype) return ESP_OK;
+                if (WLAN_FC_STYPE_PROBE_REQ  == pkt->fctl.subtype) return ESP_OK;
+                if (WLAN_FC_STYPE_PROBE_RESP == pkt->fctl.subtype) return ESP_OK;
             }
-            if (WIFI_PKT_DATA == type && (0x04u & wh->fctl.subtype)) return ESP_OK;
+            if (WIFI_PKT_DATA == type && (0x04u & pkt->fctl.subtype)) return ESP_OK;
         }
-
+        //
         if (cust_fltr.moilen) {
-            WiFiPktHdr *pkt = (WiFiPktHdr*)snoop->payload;
             do {
                 if (cust_fltr.mcastlen) {
                     if (1 == cust_fltr.mcastlen) {
@@ -630,22 +677,22 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
                         return ESP_OK;
                     } while (false);
                 }
-#if 0
-                else if (len) {
-                    do {  // Log packet on interesting Source Address or Destination Address
-                        if (!pkt->fctl.toDS   && 0 == memcmp(pkt->ra.mac,    moi, len)) continue;
-                        if (!pkt->fctl.fromDS && 0 == memcmp(pkt->ta.mac,    moi, len)) continue;
-                        if ((pkt->fctl.toDS || pkt->fctl.fromDS)
-                                              && 0 == memcmp(pkt->addr3.mac, moi, len)) continue;
-                        if ( pkt->fctl.toDS && pkt->fctl.fromDS
-                                              && 0 == memcmp(pkt->addr4.mac, moi, len)) continue;
-                        return ESP_OK;
-                    } while (false);
-                }
-#endif
+                // #if 0
+                // else if (len) {
+                //     do {  // Log packet on interesting Source Address or Destination Address
+                //         if (!pkt->fctl.toDS   && 0 == memcmp(pkt->ra.mac,    moi, len)) continue;
+                //         if (!pkt->fctl.fromDS && 0 == memcmp(pkt->ta.mac,    moi, len)) continue;
+                //         if ((pkt->fctl.toDS || pkt->fctl.fromDS)
+                //                               && 0 == memcmp(pkt->addr3.mac, moi, len)) continue;
+                //         if ( pkt->fctl.toDS && pkt->fctl.fromDS
+                //                               && 0 == memcmp(pkt->addr4.mac, moi, len)) continue;
+                //         return ESP_OK;
+                //     } while (false);
+                // }
+                // #endif
             } while (false);
         }
-
+#endif
         ssize_t length = snoop->rx_ctrl.sig_len;
         if (! cust_fltr.fcslen) {
             length -= WIFIPCAP_PAYLOAD_FCS_LEN;

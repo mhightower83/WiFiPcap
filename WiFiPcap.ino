@@ -450,7 +450,9 @@ uint32_t begin_promiscuous(void) {
     end_promiscuous();
     ESP_ERROR_CHECK(esp_wifi_set_channel(ws.channel, WIFI_SECOND_CHAN_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&ws.filter));
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_ctrl_filter(&ws.ctrl_filter));
+    if (ws.ctrl_filter.filter_mask) {
+        ESP_ERROR_CHECK(esp_wifi_set_promiscuous_ctrl_filter(&ws.ctrl_filter));
+    }
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(&wifi_promis_cb));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
     refreshScreen();

@@ -46,7 +46,7 @@ serialport = ""
 bpsRate = 9216000
 # bpsRate = 115200
 esp32_name = "WiFiPcap"
-docs_url = f"https://github.com/mhightower83/{esp32_name}"
+docs_url = f"https://github.com/mhightower83/{esp32_name}/wiki"
 
 # Regional values - The WiFiPcap is restricted by CONFIG_WIFIPCAP_CHANNEL_MAX in KConfig.h
 # max_channel = 14
@@ -135,18 +135,19 @@ def parseArgs():
 
 
     group2 = parser.add_mutually_exclusive_group(required=False)
-    group2.add_argument('--unicast', '-u', '--mac', required=False, default=None, help=f'unicast/MAC, 6 bytes of Source or Destination Address of interest in quotes with "-" or ":" separator')
+    group2.add_argument('--unicast', '-u', '--mac', required=False, default=None, help=f'unicast/MAC, 6 bytes of Source or Destination Address of interest expressed in hex and quoted, with "-" or ":" for byte separator')
     group2.add_argument('--oui', '-o', required=False, default=None, help=f'OUI, first 3 bytes of Source or Destination Address of interest in quotes with "-" or ":" separator')
-    group2.add_argument('--no_addr', dest='unicast', nargs='?', required=False, default=None, const="00:00:00:00:00:00", help=f'Clear Unicast/OUI filter option')
+    group2.add_argument('--no_addr', action='store_true', required=False, default=None, help=f'Clear Unicast/OUI filter option')
 
     group3 = parser.add_mutually_exclusive_group(required=False)
-    group3.add_argument('--multicast', '-m', nargs='?', action='store', required=False, default=None, const="01:00:00:00:00:00", help=f'Use with --unicast or --oui to capture multicast responses. First 3 or 6 bytes of a Multicst Address in quotes with "-" or ":" separator. For a 3 byte value pad with zeros to 6 bytes.')
-    group3.add_argument('--broadcast', '-b', dest='multicast', nargs='?', action='store', required=False, default=None, const="FF:FF:FF:FF:FF:FF", help=f'Use with --unicast or --oui to capture broadcast responses.')
+    group3.add_argument('--multicast', '-m', nargs='?', action='store', required=False, default=None, const="01:00:00:00:00:00", help=f'Use with --unicast or --oui to capture multicast responses. First 3 or 6 bytes of a Multicast Address in hex and quoted, with "-" or ":" for byte separator. For a 3 byte value pad with zeros to 6 bytes.')
+    group3.add_argument('--broadcast', '-b', action='store_true', required=False, default=None, help=f'Use with --unicast or --oui to capture broadcast responses.')
 
 
     group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument('--filter_mask', '-f', '--filter', required=False, default=None, help='Specify WiFi filter mask. See example and mnemonic list below.')
-    group.add_argument('--filter_all', '-a', action='store_true', default=None, help='Capture all packets possible includes type control')
+    group.add_argument('--filter_all', '-a', action='store_true', default=None, help='Capture all packets possible, includes type control and bad packets')
+    group.add_argument('--filter_good', '-g', action='store_true', default=None, help='Capture all good packets possible, includes type control')
     # This one should be the default
     group.add_argument('--filter_session', action='store_true', default=None, help='Capture AP connection and Data related packets')
     return parser.parse_args()
@@ -160,11 +161,14 @@ def parseArgs():
     # group.add_argument('--preferences_env', nargs='?', action='store', type=check_env, const="ARDUINO15_PREFERENCES_FILE", help=argparse.SUPPRESS)
 
 
-def processFilter(filter_str, filter_all, filter_connection):
+def processFilter(filter_str, filter_good, filter_all, filter_session):
     """
     These values are based on "./esp32s3/include/esp_wifi/include/esp_wifi_types.h"
     At this writing, ESP32, ESP32-S2, ESP32-S2, and ESP32-C3 have identical "esp_wifi_types.h" files.
     """
+    # The SDK uses a value of 0xFFFFFFFF for WIFI_PROMIS_FILTER_MASK_ALL. We borrow some unused bit possitions for some custom options
+    # And, replace k_filter_all with k_filter_mask_all later.
+    k_filter_all            = (0xFF80007F)  # Mask of know filter bits used by SDK, needs to be verified with each new SDK update
     k_filter_mask_all       = (0xFFFFFFFF)  # WIFI_PROMIS_FILTER_MASK_ALL,           filter/keep all packets
     k_filter_mgmt           = (1<<0)        # WIFI_PROMIS_FILTER_MASK_MGMT,          packets w/type WIFI_PKT_MGMT
     k_filter_ctrl           = (1<<1)        # WIFI_PROMIS_FILTER_MASK_CTRL,          packets w/type WIFI_PKT_CTRL
@@ -191,9 +195,14 @@ def processFilter(filter_str, filter_all, filter_connection):
     k_filter_custom_fcslen  = (1<<17)       # Internal to WiFiPcap, not an SDK value.
                                             # Experimental length includes fcs
 
+    k_filter_custom_badpkt  = (1<<18)       # keep bad packets
+
+    k_filter_custom_mask    = (0x00070000)
+
     k_filter_table = {
-        "all":       k_filter_mask_all,         # filter/keep all packets
-        "all_mask":  k_filter_mask_all,         # filter/keep all packets
+        "all":       k_filter_all,              # filter/keep all packets
+        "all_mask":  k_filter_all,              # filter/keep all packets
+        "good":      (k_filter_all & ~k_filter_fcsfail),
         #                                         packets with type:
         "mgmt":      k_filter_mgmt,             #   WIFI_PKT_MGMT
         "ctrl":      k_filter_ctrl,             #   WIFI_PKT_CTRL
@@ -215,12 +224,16 @@ def processFilter(filter_str, filter_all, filter_connection):
         "cfend":     k_filter_ctrl_cfend,       #   CF-END
         "cfendack":  k_filter_ctrl_cfendack,    #   CF-END+CF-ACK
         #
-        "session":   k_filter_custom_session,   # Capture packets related to an AP connection
-        "fcslen":    k_filter_custom_fcslen }   # Experimental - FCS length include in packet length
+        "session":   (k_filter_custom_session | k_filter_mgmt | k_filter_data),   # Capture packets related to an AP connection
+        "fcslen":    k_filter_custom_fcslen,    # Experimental - FCS length include in packet length
+        "bad":       (k_filter_custom_badpkt | k_filter_fcsfail),    # Bad packets
+        "custom_mask": k_filter_custom_mask }
 
-    supported_mnemonics = "all_mask|mgmt|ctrl|data|misc|mpdu|ampdu|fcsfail|ctrl_mas|wrapper|bar|ba|pspoll|rts|cts|ack|cfend|cfendack|session|fcslen"
+    supported_mnemonics = "all|all_mask|good|mgmt|ctrl|data|misc|mpdu|ampdu|fcsfail|ctrl_mas|wrapper|bar|ba|pspoll|rts|cts|ack|cfend|cfendack|session|fcslen"
 
     use_filter = None
+    use_custom_filter = None
+    custom_filter = 0
     filter_mask = 0
     if filter_str:
         items = filter_str.split('|')
@@ -238,14 +251,25 @@ def processFilter(filter_str, filter_all, filter_connection):
         if k_filter_ctrl_mask_all & filter_mask:
             filter_mask = k_filter_ctrl | filter_mask
 
+
+    # compose required bits to support selection
     if filter_mask:
-        use_filter = filter_mask
+        use_custom_filter = (filter_mask & k_filter_custom_mask)
+        use_filter = filter_mask & ~k_filter_custom_mask
+    elif filter_good:
+        use_filter = k_filter_mask_all & ~k_filter_fcsfail
     elif filter_all:
         use_filter = k_filter_mask_all
-    elif filter_connection:
-        use_filter = k_filter_data | k_filter_mgmt | k_filter_custom_session
+    elif filter_session:
+        use_filter = k_filter_data | k_filter_mgmt
+        use_custom_filter = k_filter_custom_session
 
-    return use_filter
+    if (use_filter & k_filter_all) == k_filter_all:
+        # If all the known SDK bits are set then most likely this should be
+        # all ones like the SDK value fro WIFI_PROMIS_FILTER_MASK_ALL.
+        use_filter = k_filter_mask_all
+
+    return [ use_filter, use_custom_filter ]
 
 
 def pickPort():
@@ -314,11 +338,16 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
     if channel:
         str += f'C{channel}'
 
-    if filter:
-        val = 0x0FFFF & (filter >> 16)
+    if filter[0] != None:                   # SDK filter
+        val = 0x0FFFF & (filter[0] >> 16)
         str += f'F{val}'
-        val = 0x0FFFF & filter
+        val = 0x0FFFF & filter[0]
         str += f'f{val}'
+    if filter[1] != None:                   # custome filter
+        val = 0x0FFFF & (filter[1] >> 16)   #   only uses the upper 16 bits.
+        str += f'S{val}'
+    else:
+        str += f'S0'
 
     if unicast:
         str += f'U{unicast[0]}u{unicast[1]}'
@@ -395,9 +424,16 @@ def main():
 
     try:
         args = parseArgs()
-        unicast = processAddress(args.unicast, args.oui)
-        multicast = processAddress(args.multicast, None)
-        filter = processFilter(args.filter_mask, args.filter_all, args.filter_session)
+        if args.no_addr:
+            unicast = [0, 0]
+            multicast = None
+        else:
+            unicast = processAddress(args.unicast, args.oui)
+            if args.broadcast:
+                multicast = [ 0x0FFFFFF, 0x0FFFFFF ]
+            else:
+                multicast = processAddress(args.multicast, None)
+        filter = processFilter(args.filter_mask, args.filter_good, args.filter_all, args.filter_session)
     except:
         print("[+] Exiting ...")
         return 1
@@ -410,22 +446,25 @@ def main():
             print("[+] Exiting ...")
             return 1
 
-    print(f'[+] --port="{port}"')
-    print(f'[+] --channel="{args.channel}"')
-    if filter:
-        print(f'[+] --filter_mask="{filter:#08x}"')
+    print(f'[+] port          ="{port}"')
+    print(f'[+] channel       ="{args.channel}"')
+    if filter[0]:
+        print(f'[+] filter_mask   ="{filter[0]:#08x}"')
     else:
-        print('[+] --filter_mask="None"')
+        print('[+] filter_mask    ="None"')
+
+    if filter[1]:
+        print(f'[+] custom_filter ="{filter[1]:#08x}"')
 
     if unicast:
-        print(f'[+] --unicast="{unicast}"')
+        print(f'[+] unicast       ="{unicast}"')
     # elif oui:
     #     print(f'[+] --oui="{oui}"')
 
     if multicast:
-        print(f'[+] --multicast="{multicast}"')
+        print(f'[+] multicast     ="{multicast}"')
 
-    print(f'[+] set time="{args.time_sync}"')
+    print(f'[+] set time      ="{args.time_sync}"')
     # sys.stdout.flush()
 
     fd = connectESP32(port, args.channel, filter, unicast, multicast, args.time_sync)

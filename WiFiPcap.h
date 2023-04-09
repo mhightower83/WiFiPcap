@@ -49,6 +49,8 @@ constexpr uint8_t maxChannel = CONFIG_WIFIPCAP_CHANNEL_MAX; // Regional value
 */
 constexpr uint32_t k_filter_custom_session = (1<<16);
 constexpr uint32_t k_filter_custom_fcslen = (1<<17);
+constexpr uint32_t k_filter_custom_badpkt = (1<<18);
+constexpr uint32_t k_filter_all_known_sdk_bits = (0xFF80007Fu);
 
 //D constexpr size_t k_pass_multicast_count = 16;
 
@@ -113,6 +115,19 @@ struct TLV {
     const uint8_t value[];
 } STRUCT_PACKED;
 
+struct LLC {
+    const uint32_t ig:1;
+    const uint32_t dsap:7;
+    const uint32_t cr:1;
+    const uint32_t ssap:7;
+    const uint32_t frametype:2;
+    const uint32_t ui:6;
+    const uint32_t oc:24;
+    const uint32_t type:16;
+} STRUCT_PACKED;
+
+constexpr uint16_t k_802_1x_authentication = (0x8E88u);
+
 struct WiFiPktHdr {
     FrameControl fctl;
     uint16_t duration;
@@ -136,6 +151,7 @@ struct WiFiPktHdr {
         MgmtBeacon probe_resp;
         MgmtProbeReq probe_req;
         MacAddr addr4;
+        LLC llc;
     };
 } STRUCT_PACKED;
 

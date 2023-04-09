@@ -62,36 +62,8 @@ Run the python script in `extras/` with `--help` for more information on how to 
 
 ## Using `build_opt.h` or `mkbuildoptglobals.py` with Arduino ESP32
 
-To use `mkbuildoptglobals.py`, you need to update `platform.local.txt` or you
+To use `mkbuildoptglobals.py`, you will need to create or update `platform.local.txt` or you
 can copy the globals parts from `WiFiPcap.ino.globals.h`'s comment block to
-`build_opt.h` minus the comments. Details about the global comment block can be
-read [here](https://github.com/esp8266/Arduino/blob/master/doc/faq/a06-global-build-options.rst)
+`build_opt.h` minus the comments.
 
-To use `mkbuildoptglobals.py`, get a copy of [`mkbuildoptglobals.py`](https://raw.githubusercontent.com/esp8266/Arduino/master/tools/mkbuildoptglobals.py) from the Arduino ESP8266 project. It will be in the `./tools/` folder. Place it in the `./tools/` folder of Arduino ESP32.
-
-Add these updates to your `platform.local.txt` file:
-```
-# This block add support for SketchName.ino.globals.h to an ESP32 build
-#
-# To avoid build confusion when using SketchName.ino.globals.h, avoid using build_opt.h
-#
-# These would disable build_opt.h
-# recipe.hooks.prebuild.5.pattern.windows=
-# recipe.hooks.prebuild.5.pattern=
-#
-# Fully qualified file names for processing sketch global options
-globals.h.source.fqfn={build.source.path}/{build.project_name}.globals.h
-commonhfile.fqfn={build.core.path}/CommonHFile.h
-build.opt.fqfn={build.path}/core/build.opt
-build.opt.flags="@{build.opt.fqfn}"
-mkbuildoptglobals.extra_flags=
-runtime.tools.mkbuildoptglobals={runtime.platform.path}/tools/mkbuildoptglobals.py
-#
-# "recipe.hooks.prebuild.9.pattern=" should be a new entry
-recipe.hooks.prebuild.9.pattern=python3 -I "{runtime.tools.mkbuildoptglobals}" "{runtime.ide.path}" {runtime.ide.version} "{build.path}" "{build.opt.fqfn}" "{globals.h.source.fqfn}" "{commonhfile.fqfn}" {mkbuildoptglobals.extra_flags}
-#
-# These lines override existing entries in platform.txt. When platform.txt is changed these may need editing.
-compiler.c.flags={compiler.c.flags.{build.mcu}} {compiler.warning_flags} {compiler.optimization_flags} {build.opt.flags}
-compiler.cpp.flags={compiler.cpp.flags.{build.mcu}} {compiler.warning_flags} {compiler.optimization_flags} {build.opt.flags}
-compiler.S.flags={compiler.S.flags.{build.mcu}} {compiler.warning_flags} {compiler.optimization_flags} {build.opt.flags}
-```
+To install `mkbuildoptglobals.py` see [Global Build Options](https://github.com/mhightower83/WiFiPcap/wiki/Global-Build-Options)
