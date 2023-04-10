@@ -126,6 +126,14 @@ struct LLC {
     const uint32_t type:16;
 } STRUCT_PACKED;
 
+struct QOS_CNTRL {
+    const uint16_t tid:4;
+    const uint16_t qos:1;
+    const uint16_t ack:2;
+    const uint16_t type:1;
+    const uint16_t txop:8;
+} STRUCT_PACKED;
+
 constexpr uint16_t k_802_1x_authentication = (0x8E88u);
 
 struct WiFiPktHdr {
@@ -151,7 +159,6 @@ struct WiFiPktHdr {
         MgmtBeacon probe_resp;
         MgmtProbeReq probe_req;
         MacAddr addr4;
-        LLC llc;
     };
 } STRUCT_PACKED;
 

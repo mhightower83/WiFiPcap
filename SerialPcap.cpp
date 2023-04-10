@@ -77,6 +77,11 @@ struct CustomFilters {
     MacAddr mcast;   // Multicast Address
     size_t moilen;   // 0 == None, 3 == OUI, 6 == MAC
     MacAddr moi;     // MAC Address Of Interest
+    uint32_t cache_auth_count;
+    uintptr_t cache_auth;
+    uintptr_t cache_next;
+    uintptr_t cache_end;
+    uintptr_t cache_read_next;
 };
 
 CustomFilters __NOINIT_ATTR cust_fltr;
@@ -98,6 +103,12 @@ struct SerialTask {
 };
 
 static SerialTask st;
+
+
+static void cache_authentications(WiFiPcap *wpcap);
+static void cache_get_init(void);
+static WiFiPcap *cache_get_next(void);
+
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -133,7 +144,7 @@ void reinit_serial(SerialTask *session) {
 
 void printSettings(SerialTask *session, int channel, uint32_t filter, const char *title) {
     session->pcapSerial->printf("%s\n", title);
-    session->pcapSerial->printf("  Channel: %u\n", channel);
+    session->pcapSerial->printf("  %s %u\n", "Channel:", channel);
     session->pcapSerial->printf("  %s 0x%08X\n", "filter:", filter);
 
     if (cust_fltr.badpkt) session->pcapSerial->printf("  %s\n", "Keep WIFI_PROMIS_FILTER_MASK_FCSFAIL");
@@ -154,6 +165,7 @@ void printSettings(SerialTask *session, int channel, uint32_t filter, const char
             session->pcapSerial->printf(":%02X", cust_fltr.moi.mac[i]);
         session->pcapSerial->printf("'\n");
     }
+    session->pcapSerial->printf("  %s %u\n", "cache_auth_count:", cust_fltr.cache_auth_count);
 }
 
 size_t parseInt2Array(uint8_t* array, int32_t* mac, SerialTask *session) {
@@ -315,6 +327,29 @@ esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
   most twice. Which I think is better than having a delay time with
   xSemaphoreGive or xSemaphoreTake.
 */
+esp_err_t prologue(SerialTask *session, const WiFiPcap *ts_ref) {
+    if (cust_fltr.cache_auth_count) {
+        uint32_t count = 0;
+        WiFiPcap *wpcap;
+        cache_get_init();
+        while ((wpcap = cache_get_next())) {
+            size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
+            // We expect Serial.write() to block - don't expect to be exposed to stream timeout
+            wpcap->pcap_header.seconds      = ts_ref->pcap_header.seconds;
+            wpcap->pcap_header.microseconds = ts_ref->pcap_header.microseconds;
+            ssize_t wrote = session->pcapSerial->write((const uint8_t*)wpcap, total_length);
+            if (wrote != total_length) {
+                ESP_LOGE(TAG, "prologue() failed!");
+                return ESP_FAIL;
+            }
+            count++;
+        }
+        ESP_LOGE(TAG, "prologue() posted %u packets", count);
+    }
+    return ESP_OK;
+}
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // Send PCAP File Header info
 esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
@@ -433,7 +468,7 @@ void serial_pcap_notifyDtrRts(bool dtr, bool rts) {
 // packet header timestamp.
 static inline void pcap_time_sync(SerialTask *session, WiFiPcap *wpcap) {
     if (session->finish_host_time_sync) {
-        session->finish_host_time_sync = false;
+        // session->finish_host_time_sync = false;
         // assume this to be ESP32 system time
         const uint32_t systime = wpcap->pcap_header.microseconds;
         const uint32_t seconds = systime / 1000000u;
@@ -507,14 +542,14 @@ static void serial_task(void *parameters) {
         bool need_resync = state.b.need_resync;
         while (need_resync) {
             if (wpcap) {
-                buffer_802_1x_authentications(wpcap);
+                cache_authentications(wpcap);
                 free(wpcap);
                 wpcap = NULL;
             }
             need_resync = (ESP_OK != pcap_serial_start(session, PCAP_LINK_TYPE_802_11));
             // Clear queue so we can get time synced properly with host
             while (pdTRUE == xQueueReceive(session->work_queue, &wpcap, 0)) {
-                buffer_802_1x_authentications(wpcap);
+                cache_authentications(wpcap);
                 free(wpcap);
             }
             wpcap = NULL;
@@ -532,18 +567,26 @@ static void serial_task(void *parameters) {
         }
         if (NULL == wpcap) continue;
 
-        pcap_time_sync(session, wpcap);
-        buffer_802_1x_authentications(wpcap);
-
-        size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
-        // We expect Serial.write() to block - don't expect to be exposed to stream timeout
-        ssize_t wrote = session->pcapSerial->write((const uint8_t*)wpcap, total_length);
-        if (wrote != total_length) {
+        bool success = true;
+        if (session->finish_host_time_sync) {
+            session->finish_host_time_sync = false;
+            pcap_time_sync(session, wpcap);
+            success = (ESP_OK == prologue(session, wpcap));
+        }
+        cache_authentications(wpcap);
+        if (success) {
+            size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
+            // We expect Serial.write() to block - don't expect to be exposed to stream timeout
+            ssize_t wrote = session->pcapSerial->write((const uint8_t*)wpcap, total_length);
+            success = (wrote == total_length);
+        }
+        if (! success) {
             // This is the path taken when Wireshark exits and python script closes.
             //
             // How best to resync with Wireshark?
             // Maybe Serial.end() and start resync logic
             // Use need_resync/need_init for now.
+            // Serial.end() does not cause the pipe to close on the host side.
             do {
                 old_state.u32 = interlocked_read((volatile uint32_t*)&session->state);
                 state = old_state;
@@ -593,16 +636,62 @@ static void serial_task(void *parameters) {
 #pragma GCC push_options
 #pragma GCC optimize("Ofast")
 
-const uint8_t k_llc_snap_hdr[] = { 0xAAu, 0xAAu, 0x01u, 0x00, 0x00, 0x00 };
-void buffer_802_1x_authentications(WiFiPcap *wpcap) {
-    const WiFiPktHdr* const pkt = (WiFiPktHdr*)wpcap->payload;
-    // Rapid disqualifier
-    if (wpcap->pcap_header.capture_length <= (sizeof(LLC) + offsetof(struct WiFiPktHdr, llc))) return;
-    if (k_802_1x_authentication != pkt->llc.type) return;
-    if (0 != memcmp(&pkt->llc, k_llc_snap_hdr, sizeof(k_llc_snap_hdr))) return;
-    // TODO: Expand - buffer authenticate packets in PSRAM
+#ifdef BOARD_HAS_PSRAM
+/*
+  Arduino ESP32 has already decided that we will be using malloc to access PSRAM.
+*/
+// #if CONFIG_SPIRAM
+// #pragma message("CONFIG_SPIRAM set")
+// #endif
+// #if CONFIG_SPIRAM_USE_MALLOC
+// #pragma message("CONFIG_SPIRAM_USE_MALLOC set")
+// #endif
+
+void cache_get_init(void) {
+    cust_fltr.cache_read_next = cust_fltr.cache_auth;
+}
+WiFiPcap *cache_get_next(void) {
+    WiFiPcap * wpcap = NULL;
+    if (cust_fltr.cache_read_next < cust_fltr.cache_next) {
+        wpcap = (WiFiPcap *)cust_fltr.cache_read_next;
+        size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
+        cust_fltr.cache_read_next += total_length;
+    }
+    return wpcap;
 }
 
+const uint8_t k_llc_snap_hdr[] = { 0xAAu, 0xAAu, 0x03u, 0x00, 0x00, 0x00 };
+static void cache_authentications(WiFiPcap *wpcap) {
+    const WiFiPktHdr* const pkt = (WiFiPktHdr*)wpcap->payload;
+    // Rapid disqualifier
+    size_t len = offsetof(struct WiFiPktHdr, addr4);
+    size_t qos_len = 0;
+    if (WLAN_FC_TYPE_DATA      == pkt->fctl.type &&
+        WLAN_FC_STYPE_QOS_DATA == pkt->fctl.subtype) qos_len = sizeof(QOS_CNTRL);
+
+    len += sizeof(LLC) + qos_len;
+    if (wpcap->pcap_header.capture_length <= len) return;
+
+    const LLC * const llc = (LLC*)((uintptr_t)pkt->addr4.mac + qos_len);
+    if (k_802_1x_authentication != llc->type) return;
+    if (0 != memcmp(llc, k_llc_snap_hdr, sizeof(k_llc_snap_hdr))) return;
+
+    if (0 == cust_fltr.cache_auth) return;
+
+    cust_fltr.cache_auth_count++;
+    // Save authentication packets as a Prologue in PSRAM to send to Wireshark
+    // at the start of a new trace. This will simplify restart work during testing.
+    // Set packet timestamps to 1 hour before trace started.
+    size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
+    uintptr_t next = cust_fltr.cache_next + total_length;
+    if (cust_fltr.cache_end >= next) {
+        memcpy((void*)cust_fltr.cache_next, wpcap, total_length);
+        cust_fltr.cache_next = next;
+    }
+}
+#else
+static void cache_authentications([[maybe_unused]] WiFiPcap *wpcap) {}
+#endif
 
 
 esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
@@ -769,6 +858,17 @@ esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter) {
         cust_fltr.session = (USE_WIFIPCAP_FILTER_AP_SESSION) ? true : false;
         cust_fltr.mcastlen = 0;
         cust_fltr.moilen = 0;
+    }
+    cust_fltr.cache_auth_count = 0;
+    size_t sz = std::min(k_auth_cache_size, heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    cust_fltr.cache_auth = (uintptr_t)ps_malloc(sz);
+    cust_fltr.cache_next = cust_fltr.cache_auth;
+    cust_fltr.cache_read_next = cust_fltr.cache_auth;
+    cust_fltr.cache_end = cust_fltr.cache_auth + k_auth_cache_size;
+
+    if (0 == cust_fltr.cache_auth) {
+        ESP_LOGE(TAG, "ps_malloc(%u) failed!", sz);
+        return ESP_FAIL;
     }
 
     if (NULL == pcapSerial) {

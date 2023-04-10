@@ -67,6 +67,7 @@ extern "C" {
 #endif
 
 constexpr uint32_t k_serial_timeout = 500u;  // ms
+constexpr size_t k_auth_cache_size = 4u * 1024u * 1024u;
 
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
@@ -141,8 +142,6 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type);
 void serial_pcap_notifyDtrRts(bool dtr, bool rts);
 
 void reset_dropped_count(void);
-
-void buffer_802_1x_authentications(WiFiPcap *wpcap);
 
 #ifdef __cplusplus
 }
