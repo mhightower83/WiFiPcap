@@ -37,6 +37,7 @@ import os
 import subprocess
 import shlex
 import signal
+import platform
 import time
 import re
 # https://stackoverflow.com/a/52809180
@@ -131,7 +132,7 @@ def parseArgs():
     parser.add_argument('--no_time_sync', '-n', dest='time_sync', action='store_false', required=False, default=True, help=f'No time sync between Host and {esp32_name}.')
     parser.add_argument('--port', '-p', required=False, default=None, help=f'Full device path for USB CDC device connected to {esp32_name}.')
     parser.add_argument('--zc', dest='channel', type=int, choices=range(1, 15), required=False, default=None, help=argparse.SUPPRESS)   # debug
-    parser.add_argument('--testing', '--test', '-t', action='store_true', default=None, help=argparse.SUPPRESS)     # debug - skips starting Wireshark
+    parser.add_argument('--testing', '--test', '-t', action='store_true', default=None, help="Test run - It does everything but start Wireshark.")
 
 
     group2 = parser.add_mutually_exclusive_group(required=False)
@@ -307,6 +308,7 @@ def pickPort():
 def connectESP32(port, channel, filter, unicast, multicast, time_sync):
     global bpsRate
 
+    retry = 3
     canBreak = False
     while not canBreak:
         try:
@@ -320,8 +322,12 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
         except KeyboardInterrupt:
             return None
         except:
-            print(f'[!] Serial port "{port}" open attempt failed!')
-            return None
+            if retry > 0:
+                retry -= 1
+                time.sleep(0.3)
+            else:
+                print(f'[!] Serial port "{port}" open attempt failed!')
+                return None
 
     print(f'[+] Connected to serial port: "{fd.name}"')
 
@@ -394,7 +400,16 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
 def runWireshark(fd):
     print("[+] Starting Wireshark ...")
     cmd='wireshark -k -i -'
-    proc=subprocess.Popen(shlex.split(cmd), stdin=fd, preexec_fn=os.setsid)
+    # proc=subprocess.Popen(shlex.split(cmd), stdin=fd, start_new_session=True)
+    proc=subprocess.Popen(shlex.split(cmd), stdin=fd)
+    proc.communicate()
+
+
+def runWiresharkWin32(fd):
+    print("[!] At this time, Windows is not supported.")
+    print("[!] Experimental, Starting Wireshark ...")
+    cmd='wireshark.exe -k -i -'
+    proc=subprocess.Popen(shlex.split(cmd), stdin=fd)
     proc.communicate()
 
 
@@ -459,6 +474,8 @@ def main():
 
     if filter[1]:
         print(f'[+] custom_filter ="{filter[1]:#08x}"')
+    else:
+        print('[+] custom_filter ="None"')
 
     if unicast:
         print(f'[+] unicast       ="{unicast}"')
@@ -477,7 +494,11 @@ def main():
         return 1
 
     if not args.testing:
-        runWireshark(fd)
+        system = platform.system()
+        if "Windows" == system:
+            runWiresharkWin32(fd)
+        else:
+            runWireshark(fd)
 
     fd.write( b'\x04' )        # send ^D (EOT)
     # fd.flush()

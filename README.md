@@ -24,6 +24,7 @@ Built with Arduino IDE 1.8.18 with ESP32 board add-on support.
     USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
     USB CDC On Boot: "Enabled"             -DARDUINO_USB_CDC_ON_BOOT=1
     Upload Mode: "UART0 / Hardware CDC"
+    Flash Size: "16MB (128Mb)"
     PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
 ```
 **LilyGo T-Dongle-S3**
@@ -33,7 +34,8 @@ Built with Arduino IDE 1.8.18 with ESP32 board add-on support.
     USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
     USB CDC On Boot: "Enabled"             -DARDUINO_USB_CDC_ON_BOOT=1
     Upload Mode: "UART0 / Hardware CDC"
-    PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
+    Flash Size: "16MB (128Mb)"
+    PSRAM: "disabled"                      not available
 ```
 
 **Other Modules**

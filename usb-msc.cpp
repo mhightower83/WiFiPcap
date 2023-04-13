@@ -33,7 +33,7 @@ extern HWCDC USBSerial;
 #define USBSerial Serial
 #else
 #define HWSerial Serial
-USBCDC USBSerial;
+extern USBCDC USBSerial;
 #endif
 
 #endif
@@ -61,7 +61,7 @@ sdmmc_card_t *card;
   Initialize SD Driver that allows the ESP32 to read and write from the
   connected SD Card. Used to service request from the MSC Class.
 */
-void sd_init(void) {
+esp_err_t sd_init(void) {
     esp_err_t ret;
     const char mount_point[] = MOUNT_POINT;
 
@@ -139,6 +139,7 @@ void sd_init(void) {
     ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
 
     if (ret != ESP_OK) {
+        // This may not going to be visable
         if (ret == ESP_FAIL) {
             USBSerial.println("Failed to mount filesystem. "
                               "If you want the card to be formatted, set the EXAMPLE_FORMAT_IF_MOUNT_FAILED menuconfig option.");
@@ -147,8 +148,8 @@ void sd_init(void) {
                              "Make sure SD card lines have pull-up resistors in place.",
                              esp_err_to_name(ret));
         }
-        return;
     }
+    return ret;
 }
 
 /*
@@ -210,7 +211,7 @@ static void usbEventCallback(void *arg, esp_event_base_t event_base, int32_t eve
 }
 #endif
 
-void setupMsc() {
+bool setupMsc() {
     // Device presented to the PC's USB connection
     // Not sure who sees these. lsusb does not report any of it.
     // Must be at a different level
@@ -221,6 +222,6 @@ void setupMsc() {
     MSC.onRead(onRead);
     MSC.onWrite(onWrite);
     MSC.mediaPresent(true);
-    MSC.begin(card->csd.capacity, card->csd.sector_size);
+    return MSC.begin(card->csd.capacity, card->csd.sector_size);
 }
 #endif // #if ARDUINO_USB_MODE

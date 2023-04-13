@@ -1,7 +1,7 @@
 #ifndef USB_MSC_H
 #define USB_MSC_H
 
-void sd_init(void);
-void setupMsc(void);
+esp_err_t sd_init(void);
+bool setupMsc(void);
 
 #endif

@@ -117,6 +117,7 @@
 
 #elif ARDUINO_LILYGO_T_DONGLE_S3
 // -DARDUINO_ESP32S3_DEV=1 is usually present
+#pragma message ("ARDUINO_LILYGO_T_DONGLE_S3")
 #include "src/T-Dongle-S3/pin_config.h"
 #include "src/T-Dongle-S3/tft_setup.h"
 
@@ -200,6 +201,9 @@ using namespace std;
 #include <Preferences.h>
 #endif
 
+#if ARDUINO_LILYGO_T_DONGLE_S3 && ARDUINO_LILYGO_T_DISPLAY_S3
+#error "Both ARDUINO_LILYGO_T_DISPLAY_S3 and ARDUINO_LILYGO_T_DONGLE_S3 are defined"
+#endif
 
 static const char *TAG = "WiFi";
 
@@ -530,7 +534,7 @@ inline void setBL(uint32_t level) {
 #endif
 
 #if ARDUINO_USB_MODE
-void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){
+void usbCdcEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){
     // Task "arduino_usb_events" runs (callbacks) with core affinity tskNO_AFFINITY
     if (event_base == ARDUINO_USB_EVENTS) {
         [[maybe_unused]]
@@ -582,6 +586,30 @@ void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, 
 
 #else
 void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){
+    CHECK_CORE(); // Called from CORE 1
+    // Task "arduino_usb_events" runs (callbacks) with core affinity tskNO_AFFINITY
+    if (event_base == ARDUINO_USB_EVENTS) {
+        [[maybe_unused]]
+        arduino_usb_event_data_t * data = (arduino_usb_event_data_t*)event_data;
+        switch (event_id) {
+            case ARDUINO_USB_STARTED_EVENT:
+                LCDPost("USB PLUGGED");
+                break;
+            case ARDUINO_USB_STOPPED_EVENT:
+                LCDPost("USB UNPLUGGED");
+                break;
+            case ARDUINO_USB_SUSPEND_EVENT:
+                LCDPost("USB SUSPENDED: remote_wakeup_en: %u", data->suspend.remote_wakeup_en);
+                break;
+            case ARDUINO_USB_RESUME_EVENT:
+                LCDPost("USB RESUMED");
+                break;
+            default:
+              break;
+        }
+    }
+}
+void usbCdcEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){
     CHECK_CORE(); // Called from CORE 1
     // Task "arduino_usb_events" runs (callbacks) with core affinity tskNO_AFFINITY
     if (event_base == ARDUINO_USB_EVENTS) {
@@ -667,16 +695,14 @@ bool is_mem_safe(void) {
 ////////////////////////////////////////////////////////////////////////////////
 //
 void setup() {
-#if ARDUINO_LILYGO_T_DISPLAY_S3
-    gpio_hold_dis((gpio_num_t)PIN_TOUCH_RES);
-#endif
-
 #if ! USE_LED_CONTROL && defined(PIN_LCD_BL)
     digitalWrite(PIN_LCD_BL, LOW); //(PIN_LCD_BL_ON) ? LOW : HIGH);
     pinMode(PIN_LCD_BL, OUTPUT);
     // gpio_hold_dis((gpio_num_t)PIN_LCD_BL);
 #endif
 #if ARDUINO_LILYGO_T_DISPLAY_S3
+    gpio_hold_dis((gpio_num_t)PIN_TOUCH_RES);
+
     pinMode(PIN_POWER_ON, OUTPUT);  // LCD Display chip
     digitalWrite(PIN_POWER_ON, HIGH);
 
@@ -706,20 +732,50 @@ void setup() {
     }
     ws.lastScreenUpdate =  millis() - kIntervalUpdate;  // Force update event on first loop().
 
+#if ARDUINO_USB_ON_BOOT && !ARDUINO_USB_MODE
+    // ARDUINO_USB_ON_BOOT (ARDUINO_USB_CDC_ON_BOOT|ARDUINO_USB_MSC_ON_BOOT|ARDUINO_USB_DFU_ON_BOOT)
+    #pragma message("\n  ARDUINO_USB_ON_BOOT defined - USB.begin() has already run.\n  Some USB calls to define/config devices may not take.\n")
+#endif
 
+    [[maybe_unused]] esp_err_t err_msc = ESP_OK;
+
+#if ARDUINO_USB_MODE
+    #pragma message ("Experimental HWCDC")
+#if ARDUINO_USB_CDC_ON_BOOT
+    USBSerial.onEvent(usbCdcEventCallback);
+#else
+    USBSerial.onEvent(usbCdcEventCallback);
+    USBSerial.begin();
+#endif
+
+#else
 #if USE_USB_MSC
     // Interfacing to the SD card in the T-Dongle-S3 plug.
-    sd_init();
+    #pragma message ("Experimental USB_MSC")
     USB.onEvent(usbEventCallback);
-    setupMsc();
-    USB.begin();
-#elif ! ARDUINO_USB_MODE
-    USB.onEvent(usbEventCallback);
+    err_msc = sd_init();
+    if (ESP_OK == err_msc) {
+        err_msc = (setupMsc()) ? ESP_OK : ESP_FAIL;
+    }
+#endif
+#if ARDUINO_USB_CDC_ON_BOOT
+    // USB.begin() was previously started we may have missed some events
+    // Also, USE_USB_MSC may not work.
+    USBSerial.onEvent(usbCdcEventCallback); // late
+#else
+    #if USE_USB_MSC
+    // Registered for ARDUINO_USB_EVENTS, ARDUINO_USB_ANY_EVENT,
+    USB.onEvent(usbEventCallback);  // ?? needed with MSC ??
+    #endif
+    // Without USB CDC On Boot: "Enabled" -DARDUINO_USB_CDC_ON_BOOT=1
+    // For USBSerial to work, we must call USB.begin().
+    // To be clear, this is the prefered build path
+    // Registered for ARDUINO_USB_CDC_EVENTS, ARDUINO_USB_CDC_ANY_EVENT
+    USBSerial.onEvent(usbCdcEventCallback);
+    USBSerial.begin();
     USB.begin();
 #endif
-    // Serial
-    USBSerial.onEvent(usbEventCallback);
-    USBSerial.begin();
+#endif
 
     // while(!Serial);
     USBSerial.printf("\n\nBegin Setup ...\n");
@@ -781,7 +837,6 @@ void setup() {
     screen.dim = kLcdBLMaxLevel;
     screen.on = true;
 #endif //  USE_DISPLAY
-
     wifi_promis_init();
 
 #ifdef PIN_BUTTON_1
@@ -791,6 +846,12 @@ void setup() {
 #endif
 #ifdef PIN_BUTTON_2
     button2.attachClick([]() { prevChannel(); });
+#endif
+
+#if USE_USB_MSC
+    if (ESP_OK != err_msc) {
+        ESP_LOGE(TAG, "MSC init failed: 0x%02X", err_msc);
+    }
 #endif
 
     /*
@@ -1000,7 +1061,7 @@ void updateScreen(const size_t chView) {
     top += gap / 2;
     #else
     size_t top = 5;
-#endif
+    #endif
 
     int32_t yPos = top;
     int32_t sz = 0;

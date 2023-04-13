@@ -112,7 +112,7 @@ void reinit_serial(SerialTask *session) {
     // HWCDC
     session->pcapSerial->end();
     // begin() set defaults of 256, can only set a new size when 0
-    session->pcapSerial->onEvent(usbEventCallback); // Serial.end() cleared callback
+    session->pcapSerial->onEvent(usbCdcEventCallback); // Serial.end() cleared callback
     session->pcapSerial->setTxBufferSize(CONFIG_WIFIPCAP_SERIAL_TX_BUFFER_SIZE);
     session->pcapSerial->setTxTimeoutMs(0);
     session->pcapSerial->begin();
@@ -120,7 +120,7 @@ void reinit_serial(SerialTask *session) {
     // USBCDC
     session->pcapSerial->end();
     // USBCDC does not have a setTxBufferSize method.
-    session->pcapSerial->onEvent(usbEventCallback);
+    // session->pcapSerial->onEvent(usbEventCallback); USBCDC::end() does not clear CB
     session->pcapSerial->begin();
 
     // For now, Hardware Serial is not supported
@@ -458,23 +458,13 @@ static esp_err_t prologue(SerialTask *session, const WiFiPcap *ts_ref) {
         cache_get_init();
         while ((wpcap = cache_get_next())) {
             // Adjust timestamps on all cache packets to the beginning of the new trace.
-            wpcap->pcap_header.seconds      = ts_ref->pcap_header.seconds;
+            wpcap->pcap_header.seconds      = ts_ref->pcap_header.seconds - 60;
             wpcap->pcap_header.microseconds = ts_ref->pcap_header.microseconds;
 
-#if 1
             if (false == writePcapWait(session, wpcap)) {
-                ESP_LOGE(TAG, "prologue() failed!");
+                ESP_LOGE(TAG, "prologue write failed!");
                 return ESP_FAIL;
             }
-#else
-            size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
-            ssize_t wrote = session->pcapSerial->write((const uint8_t*)wpcap, total_length);
-            if (wrote != total_length) {
-                ESP_LOGE(TAG, "prologue() failed!");
-                ESP_LOGE(TAG, "Write PCAP wrote %d of %u", wrote, total_length);
-                return ESP_FAIL;
-            }
-#endif
             count++;
         }
         ESP_LOGE(TAG, "prologue() posted %u packets", count);
@@ -958,17 +948,24 @@ esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter) {
         cust_fltr.mcastlen = 0;
         cust_fltr.moilen = 0;
     }
+#ifdef BOARD_HAS_PSRAM
     cust_fltr.cache_auth_count = 0;
     size_t sz = std::min(k_auth_cache_size, heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cust_fltr.cache_auth = (uintptr_t)ps_malloc(sz);
     cust_fltr.cache_next = cust_fltr.cache_auth;
     cust_fltr.cache_read_next = cust_fltr.cache_auth;
     cust_fltr.cache_end = cust_fltr.cache_auth + k_auth_cache_size;
-
     if (0 == cust_fltr.cache_auth) {
         ESP_LOGE(TAG, "ps_malloc(%u) failed!", sz);
         return ESP_FAIL;
     }
+#else
+    cust_fltr.cache_auth_count =
+    cust_fltr.cache_auth =
+    cust_fltr.cache_next =
+    cust_fltr.cache_read_next =
+    cust_fltr.cache_end = 0;
+#endif
 
     if (NULL == pcapSerial) {
         ESP_LOGE(TAG, "NULL Pcap Serial");
