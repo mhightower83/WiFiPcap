@@ -33,6 +33,21 @@
   TODO: To make printing messages more productive add support to redirect them
   to the Display.
 */
+
+#if ARDUINO_USB_MODE
+
+#if ARDUINO_USB_CDC_ON_BOOT  //Serial used for USB CDC
+#define HWSerial Serial0
+// HWCDC Serial;
+#define USBSerial Serial
+#else
+#define HWSerial Serial
+// HWCDC USBSerial; already in HWCDC.cpp
+extern HWCDC USBSerial;
+#endif
+
+#else
+
 #if ARDUINO_USB_CDC_ON_BOOT
 // For "LilyGo T-DisplayS3" Serial0, GPIO43 and 44, are accessible on JST-SH 1.0mm 4-PIN connector
 #define HWSerial Serial0
@@ -42,6 +57,7 @@
 extern USBCDC USBSerial;
 #endif
 
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,7 +83,7 @@ extern "C" {
 #endif
 
 constexpr uint32_t k_serial_timeout = 500u;  // ms
-constexpr size_t k_auth_cache_size = 4u * 1024u * 1024u;
+constexpr size_t k_auth_cache_size = 1u * 1024u * 1024u;
 
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////

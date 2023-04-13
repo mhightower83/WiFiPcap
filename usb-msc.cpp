@@ -8,11 +8,25 @@
 
 #if ARDUINO_USB_MODE
 #pragma message("This sketch should be used when USB is in OTG mode")
-#else
+#endif
 
 #include <Arduino.h>
 #include <USB.h>
 #include <USBMSC.h>
+
+#if ARDUINO_USB_MODE
+
+#if ARDUINO_USB_CDC_ON_BOOT  //Serial used for USB CDC
+#define HWSerial Serial0
+// HWCDC Serial;
+#define USBSerial Serial
+#else
+#define HWSerial Serial
+// HWCDC USBSerial; already in HWCDC.cpp
+extern HWCDC USBSerial;
+#endif
+
+#else
 
 #if ARDUINO_USB_CDC_ON_BOOT
 #define HWSerial Serial0
@@ -21,6 +35,10 @@
 #define HWSerial Serial
 USBCDC USBSerial;
 #endif
+
+#endif
+
+
 
 #include <driver/sdmmc_host.h>
 #include <driver/sdspi_host.h>
@@ -33,7 +51,7 @@ USBCDC USBSerial;
 #endif
 
 #include <sdmmc_cmd.h>
-#include "USB-MSC.h"
+#include "usb-msc.h"
 
 USBMSC MSC;
 #define MOUNT_POINT "/sdcard"
@@ -206,5 +224,3 @@ void setupMsc() {
     MSC.begin(card->csd.capacity, card->csd.sector_size);
 }
 #endif // #if ARDUINO_USB_MODE
-
-#endif  // #if USE_USB_MSC

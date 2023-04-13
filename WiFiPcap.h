@@ -166,6 +166,7 @@ size_t getChannel();
 uint32_t getFilter();
 uint32_t begin_promiscuous(uint32_t c);
 uint32_t begin_promiscuous(uint32_t c, uint32_t filter, uint32_t ctrl_filter);
+void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 
 ////////////////////////////////////////////////////////////////////////////////
 //

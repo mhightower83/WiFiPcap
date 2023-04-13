@@ -32,6 +32,8 @@
       USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
       USB CDC On Boot: "Enabled"             -DARDUINO_USB_CDC_ON_BOOT=1
       Upload Mode: "UART0 / Hardware CDC"
+      PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
+
 
   LilyGo T-Dongle-S3
 
@@ -40,6 +42,7 @@
       USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
       USB CDC On Boot: "Enabled"             -DARDUINO_USB_CDC_ON_BOOT=1
       Upload Mode: "UART0 / Hardware CDC"
+      PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
 
 
 
@@ -49,8 +52,6 @@
     https://osqa-ask.wireshark.org/questions/6293/fcs-check-is-not-displayed/
 */
 
-#if ARDUINO_USB_MODE
-#pragma message ("\n\nThis sketch must use the 'USB-OTG (TinyUSB)' option\nSet -DARDUINO_USB_MODE=0, From Arduino IDE Tools->'USB Mode: 'USB-OTG (TinyUSB)'\n\n")
 // #error "Set -DARDUINO_USB_MODE=0, From Arduino IDE Tools->'USB Mode: 'USB-OTG (TinyUSB)'"
 // Maybe need -DARDUINO_USB_CDC_ON_BOOT=0 as well ??
 
@@ -88,9 +89,17 @@
 //
 //
 
-void setup(){}
-void loop(){}
-#else
+#if ARDUINO_USB_MODE
+#pragma message ("\n\nThis sketch works best with the 'USB-OTG (TinyUSB)' option\nSet -DARDUINO_USB_MODE=0, From Arduino IDE Tools->'USB Mode: 'USB-OTG (TinyUSB)'\n\n")
+/*
+  HWCDC has a few deficiencies.
+    * Bug in current Arduino ESP32 - 'Serial.end(); Serial.begin();' crashes.
+    * No true host connect/disconnect indication. No DTR state management.
+    * DTR tightly linked to HW Reset behavior
+    * It is hard to sync ESP32 with the Host side's use of USB CDC.
+    * For this Sketch, USB-OTG CDC (TinyUSB) works better.
+*/
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Device Module, Peripherals and Configurations
@@ -183,7 +192,7 @@ using namespace std;
 
 
 #if USE_USB_MSC
-#include "USB-MSC.h"
+#include "usb-msc.h"
 #endif
 
 
@@ -520,71 +529,124 @@ inline void setBL(uint32_t level) {
 }
 #endif
 
-
-
-static void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){
-  CHECK_CORE(); // Called from CORE 1
-  // Task "arduino_usb_events" runs (callbacks) with core affinity tskNO_AFFINITY
-  if(event_base == ARDUINO_USB_EVENTS){
-    [[maybe_unused]]
-    arduino_usb_event_data_t * data = (arduino_usb_event_data_t*)event_data;
-    switch (event_id){
-      case ARDUINO_USB_STARTED_EVENT:
-        LCDPost("USB PLUGGED");
-        break;
-      case ARDUINO_USB_STOPPED_EVENT:
-        LCDPost("USB UNPLUGGED");
-        break;
-      case ARDUINO_USB_SUSPEND_EVENT:
-        LCDPost("USB SUSPENDED: remote_wakeup_en: %u", data->suspend.remote_wakeup_en);
-        break;
-      case ARDUINO_USB_RESUME_EVENT:
-        LCDPost("USB RESUMED");
-        break;
-
-      default:
-        break;
-    }
-  } else if(event_base == ARDUINO_USB_CDC_EVENTS){
-    arduino_usb_cdc_event_data_t * data = (arduino_usb_cdc_event_data_t*)event_data;
-    switch (event_id){
-      case ARDUINO_USB_CDC_CONNECTED_EVENT:
-        serial_pcap_notifyDtrRts(true, true);
-        LCDPost("CDC CONNECTED");
-        break;
-      case ARDUINO_USB_CDC_DISCONNECTED_EVENT:
-        serial_pcap_notifyDtrRts(false, false);
-        LCDPost("CDC DISCONNECTED");
-        break;
-      case ARDUINO_USB_CDC_LINE_STATE_EVENT:
-        serial_pcap_notifyDtrRts(data->line_state.dtr, data->line_state.rts);
-        // LCDPost("CDC LINE STATE: dtr: %s, rts: %s", (data->line_state.dtr) ? "True" : "False", (data->line_state.rts) ? "True" : "False");
-        LCDPost("CDC LINE STATE: DTR: %c, RTS: %c", (data->line_state.dtr) ? 'T' : 'F', (data->line_state.rts) ? 'T' : 'F');
-        break;
-      case ARDUINO_USB_CDC_LINE_CODING_EVENT:
-        {
-          const char parityChar[] ="NOEMSU";
-          const char *stopBitsChar[4] = { "1", "1.5", "2", "U" }; // 0: 1 stop bit - 1: 1.5 stop bits - 2: 2 stop bits
-          size_t parity = data->line_coding.parity; // 0: None - 1: Odd - 2: Even - 3: Mark - 4: Space
-          size_t stop_bits = data->line_coding.stop_bits; // 0: None - 1: Odd - 2: Even - 3: Mark - 4: Space
-          if (parity > 5) parity = 5; // Unknown
-          if (stop_bits > 3) stop_bits = 3; // Unknown
-          // LCDPost("CDC LINE CODING: bit_rate: %u, data_bits: %u, stop_bits: %u, parity: %u", data->line_coding.bit_rate, data->line_coding.data_bits, data->line_coding.stop_bits, data->line_coding.parity);
-          LCDPost("CDC LINE CODING: bps: %u, %u%c%s", data->line_coding.bit_rate, data->line_coding.data_bits, parityChar[parity] , stopBitsChar[stop_bits]);
+#if ARDUINO_USB_MODE
+void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){
+    // Task "arduino_usb_events" runs (callbacks) with core affinity tskNO_AFFINITY
+    if (event_base == ARDUINO_USB_EVENTS) {
+        [[maybe_unused]]
+        arduino_usb_event_data_t * data = (arduino_usb_event_data_t*)event_data;
+        switch (event_id) {
+            case ARDUINO_USB_STARTED_EVENT:
+                LCDPost("USB PLUGGED");
+                break;
+            case ARDUINO_USB_STOPPED_EVENT:
+                LCDPost("USB UNPLUGGED");
+                break;
+            case ARDUINO_USB_SUSPEND_EVENT:
+                LCDPost("USB SUSPENDED: remote_wakeup_en: %u", data->suspend.remote_wakeup_en);
+                break;
+            case ARDUINO_USB_RESUME_EVENT:
+                LCDPost("USB RESUMED");
+                break;
+            default:
+                LCDPost("USB UNKNOWN(%d)", event_id);
+                break;
         }
-        break;
-      case ARDUINO_USB_CDC_RX_EVENT:
-        LCDPost("CDC RX [%u]", data->rx.len);
-        break;
-      case ARDUINO_USB_CDC_RX_OVERFLOW_EVENT:
-        LCDPost("CDC RX OVF %u bytes", data->rx_overflow.dropped_bytes);
-        break;
-
-      default:
-        break;
+    } else
+    if (event_base == ARDUINO_HW_CDC_EVENTS) {
+        arduino_hw_cdc_event_data_t * data = (arduino_hw_cdc_event_data_t*)event_data;
+        switch (event_id){
+            case ARDUINO_HW_CDC_CONNECTED_EVENT:
+                serial_pcap_notifyDtrRts(true, true);
+                LCDPost("HW CDC CONNECTED");
+                break;
+            case ARDUINO_HW_CDC_BUS_RESET_EVENT:
+                serial_pcap_notifyDtrRts(false, false);
+                LCDPost("HW CDC BUS RESET");
+                break;
+            case ARDUINO_HW_CDC_RX_EVENT:
+                LCDPost("HW CDC RX [%u]", data->rx.len);
+                break;
+            case ARDUINO_HW_CDC_TX_EVENT:
+                //+ LCDPost("HW CDC TX [%u]", data->tx.len);
+                break;
+            case ARDUINO_HW_CDC_ANY_EVENT:
+                LCDPost("HW CDC ANY EVENT [%u]", event_id);
+                break;
+            default:
+                LCDPost("HW CDC UNKNOWN(%d)", event_id);
+                break;
+        }
     }
-  }
 }
+
+#else
+void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){
+    CHECK_CORE(); // Called from CORE 1
+    // Task "arduino_usb_events" runs (callbacks) with core affinity tskNO_AFFINITY
+    if (event_base == ARDUINO_USB_EVENTS) {
+        [[maybe_unused]]
+        arduino_usb_event_data_t * data = (arduino_usb_event_data_t*)event_data;
+        switch (event_id) {
+            case ARDUINO_USB_STARTED_EVENT:
+                LCDPost("USB PLUGGED");
+                break;
+            case ARDUINO_USB_STOPPED_EVENT:
+                LCDPost("USB UNPLUGGED");
+                break;
+            case ARDUINO_USB_SUSPEND_EVENT:
+                LCDPost("USB SUSPENDED: remote_wakeup_en: %u", data->suspend.remote_wakeup_en);
+                break;
+            case ARDUINO_USB_RESUME_EVENT:
+                LCDPost("USB RESUMED");
+                break;
+            default:
+              break;
+        }
+    } else if (event_base == ARDUINO_USB_CDC_EVENTS) {
+        arduino_usb_cdc_event_data_t * data = (arduino_usb_cdc_event_data_t*)event_data;
+        switch (event_id){
+            case ARDUINO_USB_CDC_CONNECTED_EVENT:
+                serial_pcap_notifyDtrRts(true, true);
+                LCDPost("CDC CONNECTED");
+                break;
+            case ARDUINO_USB_CDC_DISCONNECTED_EVENT:
+                serial_pcap_notifyDtrRts(false, false);
+                LCDPost("CDC DISCONNECTED");
+                break;
+            case ARDUINO_USB_CDC_LINE_STATE_EVENT:
+                serial_pcap_notifyDtrRts(data->line_state.dtr, data->line_state.rts);
+                // LCDPost("CDC LINE STATE: dtr: %s, rts: %s", (data->line_state.dtr) ? "True" : "False", (data->line_state.rts) ? "True" : "False");
+                LCDPost("CDC LINE STATE: DTR: %c, RTS: %c", (data->line_state.dtr) ? 'T' : 'F', (data->line_state.rts) ? 'T' : 'F');
+                break;
+            case ARDUINO_USB_CDC_LINE_CODING_EVENT:
+                {
+                  const char parityChar[] ="NOEMSU";
+                  const char *stopBitsChar[4] = { "1", "1.5", "2", "U" }; // 0: 1 stop bit - 1: 1.5 stop bits - 2: 2 stop bits
+                  size_t parity = data->line_coding.parity; // 0: None - 1: Odd - 2: Even - 3: Mark - 4: Space
+                  size_t stop_bits = data->line_coding.stop_bits; // 0: None - 1: Odd - 2: Even - 3: Mark - 4: Space
+                  if (parity > 5) parity = 5; // Unknown
+                  if (stop_bits > 3) stop_bits = 3; // Unknown
+                  // LCDPost("CDC LINE CODING: bit_rate: %u, data_bits: %u, stop_bits: %u, parity: %u", data->line_coding.bit_rate, data->line_coding.data_bits, data->line_coding.stop_bits, data->line_coding.parity);
+                  LCDPost("CDC LINE CODING: bps: %u, %u%c%s", data->line_coding.bit_rate, data->line_coding.data_bits, parityChar[parity] , stopBitsChar[stop_bits]);
+                }
+                break;
+            case ARDUINO_USB_CDC_RX_EVENT:
+                LCDPost("CDC RX [%u]", data->rx.len);
+                break;
+            case ARDUINO_USB_CDC_TX_EVENT:
+                // LCDPost("CDC TX"); // too many
+                break;
+            case ARDUINO_USB_CDC_RX_OVERFLOW_EVENT:
+                LCDPost("CDC RX OVF %u bytes", data->rx_overflow.dropped_bytes);
+                break;
+            default:
+                LCDPost("CDC UNKNOWN(%d)", event_id);
+                break;
+        }
+    }
+}
+#endif
 
 bool is_mem_safe(void) {
     // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/misc_system_api.html#_CPPv416esp_reset_reasonv
@@ -650,14 +712,14 @@ void setup() {
     sd_init();
     USB.onEvent(usbEventCallback);
     setupMsc();
-    USBSerial.onEvent(usbEventCallback);
-#else
+    USB.begin();
+#elif ! ARDUINO_USB_MODE
     USB.onEvent(usbEventCallback);
-    USBSerial.onEvent(usbEventCallback);
+    USB.begin();
 #endif
     // Serial
-    USBSerial.begin(115200);
-    USB.begin();
+    USBSerial.onEvent(usbEventCallback);
+    USBSerial.begin();
 
     // while(!Serial);
     USBSerial.printf("\n\nBegin Setup ...\n");
@@ -986,6 +1048,4 @@ void updateScreen(const size_t chView) {
     }
     screen.refresh = false;
 }
-#endif
-
 #endif

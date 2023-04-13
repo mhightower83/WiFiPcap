@@ -27,6 +27,7 @@
 #include <Arduino.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
+// #include <hal/usb_serial_jtag_ll.h>
 #include "SerialPcap.h"
 #include "WiFiPcap.h"
 #include "Interlocks.h"
@@ -35,7 +36,7 @@
 #define USE_WIFIPCAP_FILTER_AP_SESSION 0
 #endif
 
-#if ! ARDUINO_USB_CDC_ON_BOOT
+#if ! ARDUINO_USB_CDC_ON_BOOT && ! ARDUINO_USB_MODE
 USBCDC USBSerial(0);
 #endif
 
@@ -51,8 +52,8 @@ extern "C" {
 #define WIFIPCAP_PROCESS_PACKET_TIMEOUT_MS     (100)
 #define WIFIPCAP_HP_PROCESS_PACKET_TIMEOUT_MS  (10)      // High Priority Task
 
-#define USCLOCK32_ROLLOVER_SECONDS              (4294)    // 2^^32
-#define USCLOCK32_ROLLOVER_MICROSECONDS         (967296)
+#define USCLOCK32_ROLLOVER_SECONDS             (4294)    // 2^^32
+#define USCLOCK32_ROLLOVER_MICROSECONDS        (967296)
 
 
 struct TaskState {
@@ -67,7 +68,6 @@ union UTaskState {
   uint32_t u32;
   TaskState b;
 };
-
 
 struct CustomFilters {
     bool badpkt;
@@ -104,37 +104,33 @@ struct SerialTask {
 
 static SerialTask st;
 
-
-static void cache_authentications(WiFiPcap *wpcap);
-static void cache_get_init(void);
-static WiFiPcap *cache_get_next(void);
-
-
 ////////////////////////////////////////////////////////////////////////////////
 //
 void reinit_serial(SerialTask *session) {
-  // This appears to be needed to recover from a failed start/sync
+    // This appears to be needed to recover from a failed start/sync
 #if ARDUINO_USB_MODE
-  // HWCDC
-  //C Calling Serial.end() creates a boot loop for ARDUINO_USB_MODE
-  //C if (*session->pcapSerial) session->pcapSerial->end();
-  if (*session->pcapSerial) session->pcapSerial->end();
-  session->pcapSerial->begin();
-  session->pcapSerial->setTxBufferSize(CONFIG_WIFIPCAP_SERIAL_TX_BUFFER_SIZE); // Only HWCDC
+    // HWCDC
+    session->pcapSerial->end();
+    // begin() set defaults of 256, can only set a new size when 0
+    session->pcapSerial->onEvent(usbEventCallback); // Serial.end() cleared callback
+    session->pcapSerial->setTxBufferSize(CONFIG_WIFIPCAP_SERIAL_TX_BUFFER_SIZE);
+    session->pcapSerial->setTxTimeoutMs(0);
+    session->pcapSerial->begin();
 #else
-  // USBCDC
-  if (*session->pcapSerial) session->pcapSerial->end();
-  session->pcapSerial->begin();
+    // USBCDC
+    session->pcapSerial->end();
+    // USBCDC does not have a setTxBufferSize method.
+    session->pcapSerial->onEvent(usbEventCallback);
+    session->pcapSerial->begin();
 
-  // USBCDC does not have a setTxBufferSize method.
-
-  // For now, Hardware Serial is not supported
-  #if 0
-  session->pcapSerial->setTxBufferSize(CONFIG_WIFIPCAP_SERIAL_TX_BUFFER_SIZE);
-  session->pcapSerial->begin(CONFIG_WIFIPCAP_SERIAL_SPEED, SERIAL_8N1);
-  #endif
+    // For now, Hardware Serial is not supported
+    #if 0
+    session->pcapSerial->end();
+    session->pcapSerial->setTxBufferSize(CONFIG_WIFIPCAP_SERIAL_TX_BUFFER_SIZE);
+    session->pcapSerial->begin(CONFIG_WIFIPCAP_SERIAL_SPEED, SERIAL_8N1);
+    #endif
 #endif
-  session->pcapSerial->setTimeout(k_serial_timeout);  // Stream wait for data
+    session->pcapSerial->setTimeout(k_serial_timeout);  // Stream wait for data
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -181,11 +177,18 @@ size_t parseInt2Array(uint8_t* array, int32_t* mac, SerialTask *session) {
 }
 
 esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
+#if ARDUINO_USB_MODE
+    // Doesn't work with USBCDC.cpp
+    if (false == *session->pcapSerial) return ESP_ERR_INVALID_STATE;
+#endif
+    ESP_LOGI(TAG, "(TX) availableForWrite() %d", session->pcapSerial->availableForWrite());
+
     ESP_LOGI(TAG, "Say Hello to Host");
     // Be helpful, tell them where to download the script from
     session->pcapSerial->printf("\nUse with script:\n  https://raw.githubusercontent.com/mhightower83/WiFiPcap/extras/esp32shark.py\n");
     // First, say Hello to the python script
     session->pcapSerial->printf("\n<<SerialPcap>>\n");
+    session->pcapSerial->flush();
 
     session->timeseconds = 0;
     session->timemicroseconds = 0;
@@ -301,16 +304,188 @@ esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
             }
             printSettings(session, channel, filter, "Final Config Settings");
             session->pcapSerial->printf("<<PASSTHROUGH>>\n");
+            session->pcapSerial->flush();
+            session->pcapSerial->setTimeout(0);
             ESP_LOGI(TAG, "Host Sync Complete");
             return ESP_OK;
         } else {
-            ESP_LOGE(TAG, "Unknown config ID: '%c'", c);
-            session->pcapSerial->printf("Unknown config ID: '%c' ignored", c);
+            ESP_LOGE(TAG, "Unknown config ID: 0x%02X", c);
+            session->pcapSerial->printf("Unknown config ID: 0x%02X ignored", c);
         }
     }
     ESP_LOGE(TAG, "Missing 'X' at the end of config");
     return ESP_ERR_TIMEOUT;
 }
+
+#if ARDUINO_USB_MODE
+/*
+  Workaround for HWCDC not having a useable DTR indication for the connected state.
+*/
+constexpr uint32_t k_usb_tx_hang_timeout = 100u;
+static bool isTxHang(SerialTask *session) {
+   // TX Hang protocol check
+   bool timeout = false;
+   uint32_t start = millis();
+   do {
+       delay(5u);
+       if (session->pcapSerial->availableForWrite()) break;
+       timeout = (millis() - start > k_usb_tx_hang_timeout);
+   } while (! timeout);
+   if (timeout) {
+       ESP_LOGE(TAG, "Write PCAP HWCDC TX Hang detected");
+       serial_pcap_notifyDtrRts(false, false);
+       return true;
+   }
+   return false;
+}
+#else
+static inline bool isTxHang(SerialTask *session) { return false; }
+#endif
+
+bool writeWait(SerialTask *session, const void *data, const size_t total_length) {
+    static bool nodelay = true;
+    const uint8_t *pb = (const uint8_t *)data;
+    ssize_t remaining = total_length;
+    ssize_t wrote = 0;
+    while (remaining) {
+        wrote = session->pcapSerial->write(pb, remaining);
+        if (0 <= wrote) {
+            remaining -= wrote;
+            pb = &pb[wrote];
+            if (0 == wrote) {
+                // reduce message spew
+                if (nodelay) {
+                    ESP_LOGE(TAG, "Write PCAP wrote %d of %u", wrote, total_length);
+                } else {
+                    delay(1);
+                }
+                nodelay = false;
+#if 1 //ARDUINO_USB_MODE
+                if (isTxHang(session)) return false;
+                // HWCDC does not support DTR so we rely on the script send an
+                // EOT when closing serial. On EOT, simulate a DTR LOW event.
+                if ('\x04' == session->pcapSerial->read()) {
+                    ESP_LOGE(TAG, "Write PCAP RX EOT - Abort!");
+                    serial_pcap_notifyDtrRts(false, false);
+                    return false;
+                }
+#endif
+            } else {
+                nodelay = true;
+            }
+        } else {
+            ESP_LOGE(TAG, "Write PCAP error %d", wrote);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool writePcapWait(SerialTask *session, const WiFiPcap *wpcap) {
+    size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
+    return writeWait(session, wpcap, total_length);
+}
+
+#pragma GCC push_options
+#pragma GCC optimize("Ofast")
+
+#ifdef BOARD_HAS_PSRAM
+/*
+  Arduino ESP32 has already decided that we will be using malloc to access PSRAM.
+
+#if CONFIG_SPIRAM
+#pragma message("CONFIG_SPIRAM set")
+#endif
+#if CONFIG_SPIRAM_USE_MALLOC
+#pragma message("CONFIG_SPIRAM_USE_MALLOC set")
+#endif
+*/
+////////////////////////////////////////////////////////////////////////////////
+/*
+  Continuously collect a cache of authentication packets and store them in PSRAM
+  On new connections to Wireshark, pass the authentication cache to Wireshark to
+  aid in decoding encrypted packets.
+*/
+const uint8_t k_llc_snap_hdr[] = { 0xAAu, 0xAAu, 0x03u, 0x00, 0x00, 0x00 };
+
+static void cache_authenticate(WiFiPcap *wpcap) {
+    const WiFiPktHdr* const pkt = (WiFiPktHdr*)wpcap->payload;
+    // Rapid disqualifier
+    size_t len = offsetof(struct WiFiPktHdr, addr4);
+    size_t qos_len = 0;
+    if (WLAN_FC_TYPE_DATA      == pkt->fctl.type &&
+        WLAN_FC_STYPE_QOS_DATA == pkt->fctl.subtype) qos_len = sizeof(QOS_CNTRL);
+
+    len += sizeof(LLC) + qos_len;
+    if (wpcap->pcap_header.capture_length <= len) return;
+
+    const LLC * const llc = (LLC*)((uintptr_t)pkt->addr4.mac + qos_len);
+    if (k_802_1x_authentication != llc->type) return;
+    if (0 != memcmp(llc, k_llc_snap_hdr, sizeof(k_llc_snap_hdr))) return;
+
+    if (0 == cust_fltr.cache_auth) return;
+
+    cust_fltr.cache_auth_count++;
+    // Save authentication packets as a Prologue in PSRAM to send to Wireshark
+    // at the start of a new trace. This will simplify restart work during testing.
+    // Set packet timestamps to 1 hour before trace started.
+    size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
+    uintptr_t next = cust_fltr.cache_next + total_length;
+    if (cust_fltr.cache_end >= next) {
+        memcpy((void*)cust_fltr.cache_next, wpcap, total_length);
+        cust_fltr.cache_next = next;
+    }
+}
+
+static void cache_get_init(void) {
+    cust_fltr.cache_read_next = cust_fltr.cache_auth;
+}
+
+static WiFiPcap *cache_get_next(void) {
+    WiFiPcap * wpcap = NULL;
+    if (cust_fltr.cache_read_next < cust_fltr.cache_next) {
+        wpcap = (WiFiPcap *)cust_fltr.cache_read_next;
+        size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
+        cust_fltr.cache_read_next += total_length;
+    }
+    return wpcap;
+}
+
+static esp_err_t prologue(SerialTask *session, const WiFiPcap *ts_ref) {
+    if (cust_fltr.cache_auth_count) {
+        uint32_t count = 0;
+        WiFiPcap *wpcap;
+        cache_get_init();
+        while ((wpcap = cache_get_next())) {
+            // Adjust timestamps on all cache packets to the beginning of the new trace.
+            wpcap->pcap_header.seconds      = ts_ref->pcap_header.seconds;
+            wpcap->pcap_header.microseconds = ts_ref->pcap_header.microseconds;
+
+#if 1
+            if (false == writePcapWait(session, wpcap)) {
+                ESP_LOGE(TAG, "prologue() failed!");
+                return ESP_FAIL;
+            }
+#else
+            size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
+            ssize_t wrote = session->pcapSerial->write((const uint8_t*)wpcap, total_length);
+            if (wrote != total_length) {
+                ESP_LOGE(TAG, "prologue() failed!");
+                ESP_LOGE(TAG, "Write PCAP wrote %d of %u", wrote, total_length);
+                return ESP_FAIL;
+            }
+#endif
+            count++;
+        }
+        ESP_LOGE(TAG, "prologue() posted %u packets", count);
+    }
+    return ESP_OK;
+}
+#else
+static inline void cache_authenticate([[maybe_unused]] WiFiPcap *wpcap) {}
+static inline esp_err_t prologue(SerialTask *session, const WiFiPcap *ts_ref) { return ESP_OK; }
+#endif
+#pragma GCC pop_options
 
 
 /*
@@ -327,29 +502,6 @@ esp_err_t hostDialog(SerialTask *session, int& channel, uint32_t& filter) {
   most twice. Which I think is better than having a delay time with
   xSemaphoreGive or xSemaphoreTake.
 */
-esp_err_t prologue(SerialTask *session, const WiFiPcap *ts_ref) {
-    if (cust_fltr.cache_auth_count) {
-        uint32_t count = 0;
-        WiFiPcap *wpcap;
-        cache_get_init();
-        while ((wpcap = cache_get_next())) {
-            size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
-            // We expect Serial.write() to block - don't expect to be exposed to stream timeout
-            wpcap->pcap_header.seconds      = ts_ref->pcap_header.seconds;
-            wpcap->pcap_header.microseconds = ts_ref->pcap_header.microseconds;
-            ssize_t wrote = session->pcapSerial->write((const uint8_t*)wpcap, total_length);
-            if (wrote != total_length) {
-                ESP_LOGE(TAG, "prologue() failed!");
-                return ESP_FAIL;
-            }
-            count++;
-        }
-        ESP_LOGE(TAG, "prologue() posted %u packets", count);
-    }
-    return ESP_OK;
-}
-
-
 ////////////////////////////////////////////////////////////////////////////////
 // Send PCAP File Header info
 esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
@@ -358,7 +510,7 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
     state.u32 = interlocked_read((volatile uint32_t*)&session->state);
     if (state.b.is_running && !state.b.need_resync) return ESP_OK;
 
-    ESP_LOGI(TAG, "pcap_serial_start");
+    //+ ESP_LOGI(TAG, "pcap_serial_start");
     if (state.b.need_init) {
         reinit_serial(session);
         union UTaskState old_state;
@@ -369,25 +521,33 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
         } while (false == interlocked_compare_exchange((volatile uint32_t*)&session->state, old_state.u32, state.u32));
     }
 
+#if ARDUINO_USB_MODE
+    esp_err_t ret = ESP_FAIL;
+    while (0 < session->pcapSerial->available()) {
+        if (/* DC2 */ '\x12' == session->pcapSerial->read()) ret = ESP_OK;
+    }
+    if (ESP_OK == ret) {
+        serial_pcap_notifyDtrRts(true, true);
+    }
+#endif
     // Wait for the host side to start Serial APP, etc
     state.u32 = interlocked_read((volatile uint32_t*)&session->state);
     if (!state.b.dtr) {
         // Not yet ready
-        ESP_LOGI(TAG, "Host not yet ready DTR: %s, %sUSBSerial", (state.b.dtr) ? "HIGH" : "LOW", (*session->pcapSerial) ? "" : "!");
+        //+ ESP_LOGI(TAG, "Host not yet ready DTR: %s, %sUSBSerial", (state.b.dtr) ? "HIGH" : "LOW", (*session->pcapSerial) ? "" : "!");
         return ESP_FAIL;
     }
-    if (! *session->pcapSerial) {
-        //?? I thought this use to work and now it does not ??
-        // There might be a bug in USBCDC.cpp
-        // See comments for serial_pcap_notifyDtrRts(). This maybe an issue with
-        // the wierd rts/dtr reset & flash programming option. Which never
-        // worked to me.
+#if ARDUINO_USB_MODE
+    if (false == *session->pcapSerial) {
+        // Works with HWCDC but not USBCDC
+        // This has to do with not handling the connect state properly after a
+        // Serial.end()/Serial.begin() with DTR staying high.
         //
-        // We now rely on state.b.dtr as ready indicator
-        ESP_LOGI(TAG, "Host status DTR: %s, %sUSBSerial", (state.b.dtr) ? "HIGH" : "LOW", (*session->pcapSerial) ? "" : "!");
+        // For USBCDC, we now rely on state.b.dtr as ready indicator
+        ESP_LOGI(TAG, "Host status DTR: %s, %sUSBSerial", (state.b.dtr) ? "HIGH" : "LOW", (true == *session->pcapSerial) ? "" : "!");
     }
-
-    ESP_LOGI(TAG, "Empty RX FIFO");
+#endif
+    ESP_LOGI(TAG, "Drain RX FIFO");
     // Clear Serial RX FIFO
     while (0 < session->pcapSerial->available()) session->pcapSerial->read();
 
@@ -414,8 +574,7 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
         .link_type = link_type
     };
 
-    size_t real_write = session->pcapSerial->write((const uint8_t *)&header, sizeof(header));
-    if (sizeof(header) == real_write) {
+    if (writeWait(session, &header, sizeof(header))) {
         // All is good. We can now forward packets to the Serial interface with
         // a pcap packet header and the script will pass it on to Wireshark.
         reset_dropped_count();
@@ -444,6 +603,9 @@ esp_err_t pcap_serial_start(SerialTask *session, pcap_link_type_t link_type) {
   For connecting back with both DTR and RTS false.
    1) Raise DTR
    2) Raise RTS
+
+  There is also an issue of connect status staying disconnected after a
+  Serial.end()/Serial.begin() while DTR is held high.
 */
 void serial_pcap_notifyDtrRts(bool dtr, bool rts) {
     SerialTask *session = &st;
@@ -461,6 +623,7 @@ void serial_pcap_notifyDtrRts(bool dtr, bool rts) {
             state.b.need_resync = state.b.need_init = true;
         }
     } while (false == interlocked_compare_exchange((volatile uint32_t*)&session->state, old_state.u32, state.u32));
+    if (state.b.dtr != old_state.b.dtr) ESP_LOGE(TAG, "Host update DTR: %s", (state.b.dtr) ? "HIGH" : "LOW");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -493,6 +656,10 @@ static inline void pcap_time_sync(SerialTask *session, WiFiPcap *wpcap) {
             session->timeseconds++;
             session->timemicroseconds -= 1000000u;
         }
+        // if (1000000u <= session->timemicroseconds) {
+        //     session->timeseconds += session->timemicroseconds / 1000000u;
+        //     session->timemicroseconds = session->timemicroseconds % 1000000u;
+        // }
     }
     session->last_microseconds      = wpcap->pcap_header.microseconds;
 
@@ -542,14 +709,14 @@ static void serial_task(void *parameters) {
         bool need_resync = state.b.need_resync;
         while (need_resync) {
             if (wpcap) {
-                cache_authentications(wpcap);
+                cache_authenticate(wpcap);
                 free(wpcap);
                 wpcap = NULL;
             }
             need_resync = (ESP_OK != pcap_serial_start(session, PCAP_LINK_TYPE_802_11));
             // Clear queue so we can get time synced properly with host
             while (pdTRUE == xQueueReceive(session->work_queue, &wpcap, 0)) {
-                cache_authentications(wpcap);
+                cache_authenticate(wpcap);
                 free(wpcap);
             }
             wpcap = NULL;
@@ -568,17 +735,14 @@ static void serial_task(void *parameters) {
         if (NULL == wpcap) continue;
 
         bool success = true;
+        pcap_time_sync(session, wpcap);
         if (session->finish_host_time_sync) {
             session->finish_host_time_sync = false;
-            pcap_time_sync(session, wpcap);
             success = (ESP_OK == prologue(session, wpcap));
         }
-        cache_authentications(wpcap);
+        cache_authenticate(wpcap);
         if (success) {
-            size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
-            // We expect Serial.write() to block - don't expect to be exposed to stream timeout
-            ssize_t wrote = session->pcapSerial->write((const uint8_t*)wpcap, total_length);
-            success = (wrote == total_length);
+            success = writePcapWait(session, wpcap);
         }
         if (! success) {
             // This is the path taken when Wireshark exits and python script closes.
@@ -635,65 +799,6 @@ static void serial_task(void *parameters) {
 //
 #pragma GCC push_options
 #pragma GCC optimize("Ofast")
-
-#ifdef BOARD_HAS_PSRAM
-/*
-  Arduino ESP32 has already decided that we will be using malloc to access PSRAM.
-*/
-// #if CONFIG_SPIRAM
-// #pragma message("CONFIG_SPIRAM set")
-// #endif
-// #if CONFIG_SPIRAM_USE_MALLOC
-// #pragma message("CONFIG_SPIRAM_USE_MALLOC set")
-// #endif
-
-void cache_get_init(void) {
-    cust_fltr.cache_read_next = cust_fltr.cache_auth;
-}
-WiFiPcap *cache_get_next(void) {
-    WiFiPcap * wpcap = NULL;
-    if (cust_fltr.cache_read_next < cust_fltr.cache_next) {
-        wpcap = (WiFiPcap *)cust_fltr.cache_read_next;
-        size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
-        cust_fltr.cache_read_next += total_length;
-    }
-    return wpcap;
-}
-
-const uint8_t k_llc_snap_hdr[] = { 0xAAu, 0xAAu, 0x03u, 0x00, 0x00, 0x00 };
-static void cache_authentications(WiFiPcap *wpcap) {
-    const WiFiPktHdr* const pkt = (WiFiPktHdr*)wpcap->payload;
-    // Rapid disqualifier
-    size_t len = offsetof(struct WiFiPktHdr, addr4);
-    size_t qos_len = 0;
-    if (WLAN_FC_TYPE_DATA      == pkt->fctl.type &&
-        WLAN_FC_STYPE_QOS_DATA == pkt->fctl.subtype) qos_len = sizeof(QOS_CNTRL);
-
-    len += sizeof(LLC) + qos_len;
-    if (wpcap->pcap_header.capture_length <= len) return;
-
-    const LLC * const llc = (LLC*)((uintptr_t)pkt->addr4.mac + qos_len);
-    if (k_802_1x_authentication != llc->type) return;
-    if (0 != memcmp(llc, k_llc_snap_hdr, sizeof(k_llc_snap_hdr))) return;
-
-    if (0 == cust_fltr.cache_auth) return;
-
-    cust_fltr.cache_auth_count++;
-    // Save authentication packets as a Prologue in PSRAM to send to Wireshark
-    // at the start of a new trace. This will simplify restart work during testing.
-    // Set packet timestamps to 1 hour before trace started.
-    size_t total_length = offsetof(struct WiFiPcap, payload) + wpcap->pcap_header.capture_length;
-    uintptr_t next = cust_fltr.cache_next + total_length;
-    if (cust_fltr.cache_end >= next) {
-        memcpy((void*)cust_fltr.cache_next, wpcap, total_length);
-        cust_fltr.cache_next = next;
-    }
-}
-#else
-static void cache_authentications([[maybe_unused]] WiFiPcap *wpcap) {}
-#endif
-
-
 esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
     wifi_promiscuous_pkt_t *snoop = (wifi_promiscuous_pkt_t *)recv_buf;
     SerialTask *session = &st;
@@ -705,23 +810,24 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
     // Skip error state packets - does this include with FCS Errors ??
     // rx_ctrl.rx_state is underdocumented. I assume it would be set for errors
     // other than fcsfail. Like runt packets, jumbo packets, DMA error, etc.
-    // With WIFI_PROMIS_FILTER_MASK_FCSFAIL set, we keep all bad packets.
     if (cust_fltr.badpkt || 0 == snoop->rx_ctrl.rx_state) {
 #if 1
         const WiFiPktHdr* const pkt = (WiFiPktHdr*)snoop->payload;
         // Apply prescreen filters
         if (cust_fltr.session) {
-            // These seem to work for limiting capture of a TCP session
-            // Note, while Wireshark is logging each side needs to authenticate
-            // with the AP for decription to work.
+            // These seem to work for limiting excess captured packets when
+            // focusing on IP/TCP data. While Wireshark is logging, each side
+            // needs to authenticate with the AP for decryption to work.
+            //?? Do I need any WIFI_PKT_MGMT packets ??
             if (WIFI_PKT_MGMT == type) {
                 if (WLAN_FC_STYPE_BEACON     == pkt->fctl.subtype) return ESP_OK;
                 if (WLAN_FC_STYPE_PROBE_REQ  == pkt->fctl.subtype) return ESP_OK;
                 if (WLAN_FC_STYPE_PROBE_RESP == pkt->fctl.subtype) return ESP_OK;
             }
+            // Disregard (no data) subtypes.
             if (WIFI_PKT_DATA == type && (0x04u & pkt->fctl.subtype)) return ESP_OK;
         }
-        //
+        // Match Source or Destination Address to an OUI (or unicast address)
         if (cust_fltr.moilen) {
             do {
                 if (cust_fltr.mcastlen) {
@@ -741,11 +847,11 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
                       }
                     }
                 }
-                // By using 3 or 6 bytes, we switch from an OUI block to a full MAC address
                 size_t len = cust_fltr.moilen;
                 uint8_t *moi = cust_fltr.moi.mac;
-                if (6 == len) {
-                    do {  // Log packet on interesting Source Address or Destination Address
+                if (6 == len) { // unicast
+                    do {// Log packet on interesting Source Address or Destination Address
+                        // Check the last byte of the MAC address early, it will have more entropy.
                         if (!pkt->fctl.toDS   && pkt->ra.mac[5] == moi[5] && 0 == memcmp(pkt->ra.mac, moi, 5)) continue;
                         if (!pkt->fctl.fromDS && pkt->ta.mac[5] == moi[5] && 0 == memcmp(pkt->ta.mac, moi, 5)) continue;
                         if ((pkt->fctl.toDS || pkt->fctl.fromDS)
@@ -755,8 +861,8 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
                         return ESP_OK;
                     } while (false);
                 } else
-                if (3 == len) {
-                    do {  // Log packet on interesting Source Address or Destination Address
+                if (3 == len) { // OUI
+                    do {
                         if (!pkt->fctl.toDS   && pkt->ra.mac[0] == moi[0] && pkt->ra.mac[1] == moi[1] && pkt->ra.mac[2] == moi[2] ) continue;
                         if (!pkt->fctl.fromDS && pkt->ta.mac[0] == moi[0] && pkt->ta.mac[1] == moi[1] && pkt->ta.mac[2] == moi[2]) continue;
                         if ((pkt->fctl.toDS || pkt->fctl.fromDS)
@@ -829,19 +935,12 @@ esp_err_t serial_pcap_cb(void *recv_buf, wifi_promiscuous_pkt_type_t type) {
 #pragma GCC pop_options
 
 ////////////////////////////////////////////////////////////////////////////////
-//
 /*
   setup captured packet queue and worker thread
+  called once from setup()
 */
 esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter) {
     SerialTask *session = &st;
-
-    // if (session->is_running) return ESP_OK;
-    // TaskState state = (TaskState)interlocked_read((volatile void**)&session->state);
-    // if (!state.is_running) return 1;
-    HWSerial.printf("work_queue: 0x%08X\n", (uint32_t)session->work_queue);
-    void* val = interlocked_read((volatile void**)&session->work_queue);
-    HWSerial.printf("work_queue: 0x%08X\n", (uint32_t)val);
 
     if (interlocked_read((volatile void**)&session->work_queue)) return ESP_FAIL;
 

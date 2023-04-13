@@ -264,7 +264,7 @@ def processFilter(filter_str, filter_good, filter_all, filter_session):
         use_filter = k_filter_data | k_filter_mgmt
         use_custom_filter = k_filter_custom_session
 
-    if (use_filter & k_filter_all) == k_filter_all:
+    if use_filter and (use_filter & k_filter_all) == k_filter_all:
         # If all the known SDK bits are set then most likely this should be
         # all ones like the SDK value fro WIFI_PROMIS_FILTER_MASK_ALL.
         use_filter = k_filter_mask_all
@@ -311,6 +311,11 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
     while not canBreak:
         try:
             fd = serial.Serial(port, bpsRate)
+            # interrupt stream or wakeup esp32
+            fd.write( b'\x04' )        # send ^D (EOT)
+            fd.write( b'\x12' )        # send ^R (DC2 - ready)
+            time.sleep(0.1)
+            fd.reset_input_buffer()
             canBreak = True
         except KeyboardInterrupt:
             return None
@@ -346,8 +351,6 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
     if filter[1] != None:                   # custome filter
         val = 0x0FFFF & (filter[1] >> 16)   #   only uses the upper 16 bits.
         str += f'S{val}'
-    else:
-        str += f'S0'
 
     if unicast:
         str += f'U{unicast[0]}u{unicast[1]}'
@@ -433,6 +436,7 @@ def main():
                 multicast = [ 0x0FFFFFF, 0x0FFFFFF ]
             else:
                 multicast = processAddress(args.multicast, None)
+
         filter = processFilter(args.filter_mask, args.filter_good, args.filter_all, args.filter_session)
     except:
         print("[+] Exiting ...")
@@ -451,7 +455,7 @@ def main():
     if filter[0]:
         print(f'[+] filter_mask   ="{filter[0]:#08x}"')
     else:
-        print('[+] filter_mask    ="None"')
+        print('[+] filter_mask   ="None"')
 
     if filter[1]:
         print(f'[+] custom_filter ="{filter[1]:#08x}"')
@@ -475,6 +479,8 @@ def main():
     if not args.testing:
         runWireshark(fd)
 
+    fd.write( b'\x04' )        # send ^D (EOT)
+    # fd.flush()
     fd.close()
     print("[+] Done.")
     return 0
