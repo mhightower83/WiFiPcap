@@ -161,7 +161,9 @@ void printSettings(SerialTask *session, int channel, uint32_t filter, const char
             session->pcapSerial->printf(":%02X", cust_fltr.moi.mac[i]);
         session->pcapSerial->printf("'\n");
     }
-    session->pcapSerial->printf("  %s %u\n", "cache_auth_count:", cust_fltr.cache_auth_count);
+    if (cust_fltr.cache_auth_count) {
+        session->pcapSerial->printf("  %s %u\n", "cache_auth_count:", cust_fltr.cache_auth_count);
+    }
 }
 
 size_t parseInt2Array(uint8_t* array, int32_t* mac, SerialTask *session) {
@@ -389,7 +391,7 @@ bool writePcapWait(SerialTask *session, const WiFiPcap *wpcap) {
 #pragma GCC push_options
 #pragma GCC optimize("Ofast")
 
-#ifdef BOARD_HAS_PSRAM
+#if defined(BOARD_HAS_PSRAM) || defined(USE_DRAM_CACHE)
 /*
   Arduino ESP32 has already decided that we will be using malloc to access PSRAM.
 
@@ -410,6 +412,7 @@ const uint8_t k_llc_snap_hdr[] = { 0xAAu, 0xAAu, 0x03u, 0x00, 0x00, 0x00 };
 
 static void cache_authenticate(WiFiPcap *wpcap) {
     const WiFiPktHdr* const pkt = (WiFiPktHdr*)wpcap->payload;
+    if (0 == cust_fltr.cache_auth) return;
     // Rapid disqualifier
     size_t len = offsetof(struct WiFiPktHdr, addr4);
     size_t qos_len = 0;
@@ -422,8 +425,6 @@ static void cache_authenticate(WiFiPcap *wpcap) {
     const LLC * const llc = (LLC*)((uintptr_t)pkt->addr4.mac + qos_len);
     if (k_802_1x_authentication != llc->type) return;
     if (0 != memcmp(llc, k_llc_snap_hdr, sizeof(k_llc_snap_hdr))) return;
-
-    if (0 == cust_fltr.cache_auth) return;
 
     cust_fltr.cache_auth_count++;
     // Save authentication packets as a Prologue in PSRAM to send to Wireshark
@@ -467,6 +468,7 @@ static esp_err_t prologue(SerialTask *session, const WiFiPcap *ts_ref) {
             }
             count++;
         }
+        // Side note, Wireshark does not expect a header with zero length payload
         ESP_LOGE(TAG, "prologue() posted %u packets", count);
     }
     return ESP_OK;
@@ -948,23 +950,33 @@ esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter) {
         cust_fltr.mcastlen = 0;
         cust_fltr.moilen = 0;
     }
-#ifdef BOARD_HAS_PSRAM
+#if defined(BOARD_HAS_PSRAM) || defined(USE_DRAM_CACHE)
     cust_fltr.cache_auth_count = 0;
     size_t sz = std::min(k_auth_cache_size, heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    cust_fltr.cache_auth = (uintptr_t)ps_malloc(sz);
+    if (sz) {
+        cust_fltr.cache_auth = (uintptr_t)ps_malloc(sz);
+    } else {
+        sz = 64 * 1024u;    // Fallback to small DRAM buffer
+        cust_fltr.cache_auth = (uintptr_t)malloc(sz);
+    }
     cust_fltr.cache_next = cust_fltr.cache_auth;
     cust_fltr.cache_read_next = cust_fltr.cache_auth;
-    cust_fltr.cache_end = cust_fltr.cache_auth + k_auth_cache_size;
-    if (0 == cust_fltr.cache_auth) {
-        ESP_LOGE(TAG, "ps_malloc(%u) failed!", sz);
-        return ESP_FAIL;
+    cust_fltr.cache_end = cust_fltr.cache_auth;
+    if (cust_fltr.cache_auth) {
+        cust_fltr.cache_end += sz;
+    } else {
+        ESP_LOGE(TAG, "Cache AUTH malloc(%u) failed!", sz);
+        // Let the system start without the Cache
+        // return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "Cache AUTH 0x%08X = malloc(%u) success", cust_fltr.cache_auth, sz);
 #else
     cust_fltr.cache_auth_count =
     cust_fltr.cache_auth =
     cust_fltr.cache_next =
     cust_fltr.cache_read_next =
     cust_fltr.cache_end = 0;
+    ESP_LOGI(TAG, "No Cache AUTH");
 #endif
 
     if (NULL == pcapSerial) {
@@ -978,24 +990,36 @@ esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter) {
         ESP_LOGE(TAG, "create work queue failed");
         return ESP_FAIL;
     }
-
-    if (pdPASS == xTaskCreatePinnedToCore(
+#if 0
+    // Let the OS choose processor - lets see if this handles contension with
+    // MSC better.
+    // Update: No - it is much worse!
+    auto ret =
+    xTaskCreate(
+        serial_task,                     // TaskFunction_t, Function to implement the task
+        "SerialTask",                    // char *, Task Name
+        CONFIG_WIFIPCAP_TASK_STACK_SIZE, // uint32_t, Stack size in bytes (4 byte increments)
+        session,                         // void *, Task input parameter
+        CONFIG_WIFIPCAP_TASK_PRIORITY,   // 2 - UBaseType_t , Priority of the task
+        (void**)&session->task);         // TaskHandle_t *, Task handle
+#else
+    // Linux appears to drop key-strokes when the USB CDC is busy with
+    // Wireshark.
+    //
+    // Ideally we want to run on the opposite core to the SDK, splitting
+    // the burdon of packet handling.
+    auto ret =
+    xTaskCreatePinnedToCore(
         serial_task,                     // TaskFunction_t, Function to implement the task
         "SerialTask",                    // char *, Task Name
         CONFIG_WIFIPCAP_TASK_STACK_SIZE, // uint32_t, Stack size in bytes (4 byte increments)
         session,                         // void *, Task input parameter
         CONFIG_WIFIPCAP_TASK_PRIORITY,   // 2 - UBaseType_t , Priority of the task
         (void**)&session->task,          // TaskHandle_t *, Task handle
-        // PRO_CPU_NUM)                    // BaseType_t, Core where the task should run
-        APP_CPU_NUM)                     // BaseType_t, Core where the task should run
-        ) {
-        //
-        // Linux appears to drop key-strokes when the USB CDC is busy with
-        // Wireshark.
-        //
-        // Ideally we want to run on the opposite core to the SDK, splitting
-        // the burdon of packet handling.
-        //
+        // PRO_CPU_NUM);                   // BaseType_t, Core where the task should run
+        APP_CPU_NUM);                    // BaseType_t, Core where the task should run
+#endif
+    if (pdPASS == ret) {
         // The task will set "is_running" at startup
         ESP_LOGI(TAG, "Create Task Success");
         return ESP_OK;

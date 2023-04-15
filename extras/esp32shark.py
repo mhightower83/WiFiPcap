@@ -43,6 +43,10 @@ import re
 # https://stackoverflow.com/a/52809180
 import serial.tools.list_ports
 
+# Update Wireshark path as needed
+wireshark_path='wireshark'
+wireshark_path_win32=r'C:\Program Files\Wireshark\Wireshark.exe'
+
 serialport = ""
 bpsRate = 9216000
 # bpsRate = 115200
@@ -399,17 +403,17 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
 
 def runWireshark(fd):
     print("[+] Starting Wireshark ...")
-    cmd='wireshark -k -i -'
-    # proc=subprocess.Popen(shlex.split(cmd), stdin=fd, start_new_session=True)
-    proc=subprocess.Popen(shlex.split(cmd), stdin=fd)
+    proc=subprocess.Popen([ wireshark_path, '-k', '-i', '-' ], stdin=fd)
     proc.communicate()
+    # cmd='wireshark -k -i -'
+    # proc=subprocess.Popen(shlex.split(cmd), stdin=fd, start_new_session=True)
+    # proc=subprocess.Popen(shlex.split(cmd), stdin=fd)
 
 
 def runWiresharkWin32(fd):
     print("[!] At this time, Windows is not supported.")
     print("[!] Experimental, Starting Wireshark ...")
-    cmd='wireshark.exe -k -i -'
-    proc=subprocess.Popen(shlex.split(cmd), stdin=fd)
+    proc=subprocess.Popen([ wireshark_path_win32, '-k', '-i', '-' ], stdin=fd)
     proc.communicate()
 
 
@@ -500,9 +504,12 @@ def main():
         else:
             runWireshark(fd)
 
-    fd.write( b'\x04' )        # send ^D (EOT)
-    # fd.flush()
-    fd.close()
+    try:
+        fd.write( b'\x04' )        # send ^D (EOT)
+        fd.close()
+    except:
+        pass
+
     print("[+] Done.")
     return 0
 

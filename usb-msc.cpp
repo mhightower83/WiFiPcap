@@ -1,7 +1,31 @@
 /*
 
-  This Sketch appears to have taken inspiration from
-  ./esp32/libraries/USB/examples/USBMSC/USBMSC.ino
+  A similar Sketch ./esp32/libraries/USB/examples/USBMSC/USBMSC.ino
+
+  Reference
+  https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/sdmmc_host.html#supported-speed-modes
+  Hmm, https://www.sdcard.org/developers/sd-standard-overview/low-voltage-signaling/#:~:text=UHS%2DI%20adopted%201.8V,support%203.3V%20signaling%2C%20too.
+
+  Speed modes not supported at present:
+    * High Speed DDR mode, 8-line eMMC
+    * UHS-I 1.8 V modes, 4-line SD cards
+
+  What I think this means is we are operating the device in 3.3 V compatibility
+  mode.
+
+  If not using both USBCDC and USBMSC at the same time, it can run for 1 hour
+  before USBCDC stalls and the interface disappears on the host side. MSC seems
+  to still be working.
+
+  For a more stable tool build without USBMSC support, ""-DUSE_USB_MSC=0"
+
+  New observation, part of my stability issues may be overheating.
+  My T-Dongle-S3 was not receiving any packets when I plugged it in.
+  The same code built for the T-Display-S3 worked. After an hour or two to
+  cool down I tried the T-Dongle-S3 and it worked again. Display and TFCard
+  increase heat. Maybe I should power off the display or dim.
+
+  I don't think I can judge if this works or not with my T-Dongle-S3.
 */
 #if USE_USB_MSC
 
@@ -57,12 +81,16 @@ USBMSC MSC;
 #define MOUNT_POINT "/sdcard"
 sdmmc_card_t *card;
 
+static struct {
+  esp_err_t sd=-1;
+  bool msc=false;
+} usb_err;
+
 /*
   Initialize SD Driver that allows the ESP32 to read and write from the
   connected SD Card. Used to service request from the MSC Class.
 */
 esp_err_t sd_init(void) {
-    esp_err_t ret;
     const char mount_point[] = MOUNT_POINT;
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
@@ -91,11 +119,13 @@ esp_err_t sd_init(void) {
 
       Uses SDMMC peripheral, with 4-bit mode enabled, and max frequency set to default 20MHz.
       A lot of this is from SDMMC_HOST_DEFAULT in sdmmc_host.h; however, .flags is different.
+      Reference SD_MMC.cpp
     */
+    #if 0
     sdmmc_host_t host = {
-        .flags = SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_DDR,
+        .flags = SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_DDR, // ?? SDMMC_HOST_FLAG_DDR no in SD_MMC
         .slot = SDMMC_HOST_SLOT_1,
-        .max_freq_khz = SDMMC_FREQ_DEFAULT,
+        .max_freq_khz = SDMMC_FREQ_DEFAULT, // BOARD_MAX_SDMMC_FREQ
         .io_voltage = 3.3f,
         .init = &sdmmc_host_init,
         .set_bus_width = &sdmmc_host_set_bus_width,
@@ -108,8 +138,17 @@ esp_err_t sd_init(void) {
         .io_int_wait = sdmmc_host_io_int_wait,
         .command_timeout_ms = 0,
     };
-
+    #else
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    // For using SDMMC_HOST_FLAG_DDR and SDMMC_FREQ_HIGHSPEED (40MHz)
+    // SDMMC_HOST_FLAG_DDR require clean signals
+    // Review https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/sdmmc_host.html#ddr-mode-for-emmc-chips
+    host.flags = SDMMC_HOST_FLAG_4BIT; //| SDMMC_HOST_FLAG_DDR;
+    // host.max_freq_khz = BOARD_MAX_SDMMC_FREQ; // default SDMMC_FREQ_DEFAULT; // 20MHz
+    #endif
+#if 0
     // Configuration of SDMMC host slot - based on SDMMC_SLOT_CONFIG_DEFAULT in sdmmc_host.h
+    // ESP32-S3 SDMMC Host can be configured to use arbitrary GPIOs for each of the signals.
     sdmmc_slot_config_t slot_config = {
         .clk = (gpio_num_t)SD_MMC_CLK_PIN,
         .cmd = (gpio_num_t)SD_MMC_CMD_PIN,
@@ -123,10 +162,27 @@ esp_err_t sd_init(void) {
         .d7 = GPIO_NUM_NC,
         .cd = SDMMC_SLOT_NO_CD,   // card present indicator not available
         .wp = SDMMC_SLOT_NO_WP,   // card write protection indicator not available
-        .width = 4, // SDMMC_SLOT_WIDTH_DEFAULT, // Weird - this was defined 0 in sdmmc_host.h
+        .width = 4, // SDMMC_SLOT_WIDTH_DEFAULT, // Same as SD_MMC.cpp
         .flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP,
     };
-
+#else
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot_config.clk = (gpio_num_t)SD_MMC_CLK_PIN;
+    slot_config.cmd = (gpio_num_t)SD_MMC_CMD_PIN;
+    slot_config.d0 = (gpio_num_t)SD_MMC_D0_PIN;
+    slot_config.d1 = (gpio_num_t)SD_MMC_D1_PIN;
+    slot_config.d2 = (gpio_num_t)SD_MMC_D2_PIN;
+    slot_config.d3 = (gpio_num_t)SD_MMC_D3_PIN;
+    slot_config.d4 = GPIO_NUM_NC;
+    slot_config.d5 = GPIO_NUM_NC;
+    slot_config.d6 = GPIO_NUM_NC;
+    slot_config.d7 = GPIO_NUM_NC;
+    slot_config.cd = SDMMC_SLOT_NO_CD;
+    slot_config.wp = SDMMC_SLOT_NO_WP;
+    slot_config.width = 4;
+    slot_config.flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP; // This should ensure all the pins are in the same state
+#endif
+#if 0
     // The connector also has 10K Pullups.
     // ?? Note SD_MMC_CLK_PIN was not included here ??
     // Is this redundant to above `.flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP` line?
@@ -135,21 +191,42 @@ esp_err_t sd_init(void) {
     gpio_set_pull_mode((gpio_num_t)SD_MMC_D1_PIN, GPIO_PULLUP_ONLY);  // D1, needed in 4-line mode only
     gpio_set_pull_mode((gpio_num_t)SD_MMC_D2_PIN, GPIO_PULLUP_ONLY);  // D2, needed in 4-line mode only
     gpio_set_pull_mode((gpio_num_t)SD_MMC_D3_PIN, GPIO_PULLUP_ONLY);  // D3, needed in 4- and 1-line modes
+#else
+// https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/gpio.html?highlight=gpio_set_drive_capability#_CPPv425gpio_set_drive_capability10gpio_num_t16gpio_drive_cap_t
+// https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/gpio.html?highlight=gpio_set_drive_capability#_CPPv416gpio_drive_cap_t
+// Drive Strengths
+//   * 0: ~10 mA
+//   * 1: ~20 mA
+//   * 2: ~40 mA  - default
+//   * 3: ~80 mA
+    // constexpr gpio_drive_cap_t drive_strength = GPIO_DRIVE_CAP_0; // Weak
+    constexpr gpio_drive_cap_t drive_strength = GPIO_DRIVE_CAP_1; // stronger
+    // constexpr gpio_drive_cap_t drive_strength = GPIO_DRIVE_CAP_2; // medium, GPIO_DRIVE_CAP_DEFAULT
+    // constexpr gpio_drive_cap_t drive_strength = GPIO_DRIVE_CAP_3; // strongest, GPIO_DRIVE_CAP_MAX
+    gpio_set_drive_capability((gpio_num_t)SD_MMC_CLK_PIN, GPIO_DRIVE_CAP_0);    // reduce ringing on clock
+    gpio_set_drive_capability((gpio_num_t)SD_MMC_CMD_PIN, drive_strength);
+    gpio_set_drive_capability((gpio_num_t)SD_MMC_D0_PIN,  drive_strength);
+    gpio_set_drive_capability((gpio_num_t)SD_MMC_D1_PIN,  drive_strength);
+    gpio_set_drive_capability((gpio_num_t)SD_MMC_D2_PIN,  drive_strength);
+    gpio_set_drive_capability((gpio_num_t)SD_MMC_D3_PIN,  drive_strength);
+#endif
+    usb_err.sd = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
 
-    ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
-
-    if (ret != ESP_OK) {
+    if (usb_err.sd != ESP_OK) {
         // This may not going to be visable
-        if (ret == ESP_FAIL) {
-            USBSerial.println("Failed to mount filesystem. "
-                              "If you want the card to be formatted, set the EXAMPLE_FORMAT_IF_MOUNT_FAILED menuconfig option.");
+        if (usb_err.sd == ESP_FAIL) {
+            HWSerial.printf("Failed to mount filesystem. "
+                              "If you want the card to be formatted, set the EXAMPLE_FORMAT_IF_MOUNT_FAILED menuconfig option.\n");
+        } else
+        if (usb_err.sd == ESP_ERR_INVALID_STATE) {
+            HWSerial.printf("SD Card Already mounted\n");
         } else {
-            USBSerial.printf("Failed to initialize the card (%s). "
-                             "Make sure SD card lines have pull-up resistors in place.",
-                             esp_err_to_name(ret));
+            HWSerial.printf("Failed to initialize the card (%s). "
+                             "Make sure SD card lines have pull-up resistors in place.\n",
+                             esp_err_to_name(usb_err.sd));
         }
     }
-    return ret;
+    return usb_err.sd;
 }
 
 /*
@@ -187,7 +264,7 @@ static bool onStartStop(uint8_t power_condition, bool start, bool load_eject) {
   HWSerial printing - tree falling in the forest.
   Maybe later use that fancy LCD Display for these messages.
 */
-static void usbEventCallback(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
+static void usbMscEventCallback(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     if (event_base == ARDUINO_USB_EVENTS) {
         arduino_usb_event_data_t *data = (arduino_usb_event_data_t *)event_data;
         switch (event_id) {
@@ -222,6 +299,15 @@ bool setupMsc() {
     MSC.onRead(onRead);
     MSC.onWrite(onWrite);
     MSC.mediaPresent(true);
-    return MSC.begin(card->csd.capacity, card->csd.sector_size);
+    usb_err.msc = MSC.begin(card->csd.capacity, card->csd.sector_size);
+    return usb_err.msc;
 }
+
+void sd_end(void) {
+    const char mount_point[] = MOUNT_POINT;
+    // if (usb_err.msc) MSC.end();
+    // if (usb_err.sd == ESP_OK)
+    esp_vfs_fat_sdcard_unmount(mount_point, card);
+}
+
 #endif // #if ARDUINO_USB_MODE

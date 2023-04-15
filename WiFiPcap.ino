@@ -30,7 +30,7 @@
     Build with:
       Board: "LilyGo T-DisplayS3"            -DARDUINO_LILYGO_T_DISPLAY_S3=1
       USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
-      USB CDC On Boot: "Enabled"             -DARDUINO_USB_CDC_ON_BOOT=1
+      USB CDC On Boot: "Disabled"            -DARDUINO_USB_CDC_ON_BOOT=0
       Upload Mode: "UART0 / Hardware CDC"
       PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
 
@@ -40,11 +40,11 @@
     Build with:
       Board: "ESP32S3-Dev Module"            -DARDUINO_ESP32S3_DEV=1
       USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
-      USB CDC On Boot: "Enabled"             -DARDUINO_USB_CDC_ON_BOOT=1
+      USB CDC On Boot: "Disabled"            -DARDUINO_USB_CDC_ON_BOOT=0
       Upload Mode: "UART0 / Hardware CDC"
-      PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
+      PSRAM: "Disabled"                      none
 
-
+  All USB options that require TinyUSB should have "Disabled" selected.
 
   Wireshark links
     https://wiki.wireshark.org/HowToDecrypt802.11
@@ -676,6 +676,15 @@ void usbCdcEventCallback(void* arg, esp_event_base_t event_base, int32_t event_i
 }
 #endif
 
+void printMemory(Print& out) {
+    out.printf("Heap DRAM\n");
+    out.printf(" %-7s %d\n", "Total:", ESP.getHeapSize());
+    out.printf(" %-7s %d\n", "Free:",  ESP.getFreeHeap());
+    out.printf("\nPSRAM\n");
+    out.printf(" %-7s %d\n", "Total:", ESP.getPsramSize());
+    out.printf(" %-7s %d\n", "Free:", ESP.getFreePsram());
+}
+
 bool is_mem_safe(void) {
     // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/misc_system_api.html#_CPPv416esp_reset_reasonv
     switch (esp_reset_reason())
@@ -740,7 +749,11 @@ void setup() {
     [[maybe_unused]] esp_err_t err_msc = ESP_OK;
 
 #if ARDUINO_USB_MODE
-    #pragma message ("Experimental HWCDC")
+    #pragma message ("\nExperimental HWCDC\n")
+    #if USE_USB_MSC
+    #pragma message ("Don't mix HWCDC with USBMSC\n")
+    #unset USE_USB_MSC
+    #endif
 #if ARDUINO_USB_CDC_ON_BOOT
     USBSerial.onEvent(usbCdcEventCallback);
 #else
@@ -749,13 +762,19 @@ void setup() {
 #endif
 
 #else
+    // Using 100% TinyUSB
 #if USE_USB_MSC
     // Interfacing to the SD card in the T-Dongle-S3 plug.
     #pragma message ("Experimental USB_MSC")
-    USB.onEvent(usbEventCallback);
     err_msc = sd_init();
     if (ESP_OK == err_msc) {
-        err_msc = (setupMsc()) ? ESP_OK : ESP_FAIL;
+        if (setupMsc()) {
+            // Registered for ARDUINO_USB_EVENTS, ARDUINO_USB_ANY_EVENT,
+            USB.onEvent(usbEventCallback);
+        } else {
+            err_msc = ESP_ERR_INVALID_ARG;
+            sd_end();
+        }
     }
 #endif
 #if ARDUINO_USB_CDC_ON_BOOT
@@ -763,10 +782,6 @@ void setup() {
     // Also, USE_USB_MSC may not work.
     USBSerial.onEvent(usbCdcEventCallback); // late
 #else
-    #if USE_USB_MSC
-    // Registered for ARDUINO_USB_EVENTS, ARDUINO_USB_ANY_EVENT,
-    USB.onEvent(usbEventCallback);  // ?? needed with MSC ??
-    #endif
     // Without USB CDC On Boot: "Enabled" -DARDUINO_USB_CDC_ON_BOOT=1
     // For USBSerial to work, we must call USB.begin().
     // To be clear, this is the prefered build path
@@ -777,7 +792,7 @@ void setup() {
 #endif
 #endif
 
-    // while(!Serial);
+    // while(!Serial);  // This works with HWCDC and fails with USBCDC
     USBSerial.printf("\n\nBegin Setup ...\n");
 
     // display
@@ -850,7 +865,7 @@ void setup() {
 
 #if USE_USB_MSC
     if (ESP_OK != err_msc) {
-        ESP_LOGE(TAG, "MSC init failed: 0x%02X", err_msc);
+        ESP_LOGE(TAG, "MSC init failed: %s", esp_err_to_name(err_msc));
     }
 #endif
 
@@ -859,7 +874,12 @@ void setup() {
       setTxBuffer after begin with HWCDC and before for HardwareSerial
     */
     USBSerial.printf("Start serial pcap\n\n");
-    serial_pcap_start(&USBSerial, init_custom_filter);
+    if (ESP_OK != serial_pcap_start(&USBSerial, init_custom_filter)) {
+        ESP_LOGE(TAG, "Serial pcap failed to start.");
+    }
+
+    delay(100);
+    printMemory(HWSerial);
 }
 
 void userIO() {

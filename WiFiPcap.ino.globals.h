@@ -10,20 +10,24 @@
 // and T-Dongle-S3. For other modules leave both commented out.
 
 
-// -DARDUINO_LILYGO_T_DISPLAY_S3=1
-// // This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
-// // This must point into you Sketch folder ./src/T-Display-S3/
-// -I"/home/mhightow/Arduino/ESPs/WiFiPcap/src/T-Display-S3/"
-// -DUSE_USB_MSC=0
-
-
--DARDUINO_LILYGO_T_DONGLE_S3=1
+-DARDUINO_LILYGO_T_DISPLAY_S3=1
 // This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
-// This must point into you Sketch folder ./src/T-Dongle-S3/
--I"/home/mhightow/Arduino/ESPs/WiFiPcap/src/T-Dongle-S3/"
-// -DUSE_USB_MSC=1
-// Has hardware support, but with the current Arduino Core USB is unstable with this option
+// This must point into you Sketch folder ./src/T-Display-S3/
+-I"/home/mhightow/Arduino/ESPs/WiFiPcap/src/T-Display-S3/"
 -DUSE_USB_MSC=0
+
+
+//
+// -DARDUINO_LILYGO_T_DONGLE_S3=1
+// // This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
+// // This must point into you Sketch folder ./src/T-Dongle-S3/
+// -I"/home/mhightow/Arduino/ESPs/WiFiPcap/src/T-Dongle-S3/"
+// -DUSE_DRAM_CACHE=1
+// // Has hardware support for Micro SDCard, but with the current Arduino Core USB
+// // is unstable with  this option. However, if the Micro SDCard is not plugged
+// // in, it should be stable.
+// -DUSE_USB_MSC=1
+// // -DUSE_USB_MSC=0
 
 
 // Remove development phase informative prints
@@ -35,7 +39,8 @@
 -DUSE_WIFIPCAP_FILTER_AP_SESSION=1
 
 
-
+// Build testing defines, should be commented out
+// -DUSE_DRAM_CACHE=1
 // -DUSE_USB_MSC=1
 */
 

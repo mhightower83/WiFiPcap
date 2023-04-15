@@ -10,7 +10,7 @@ help avoid dropped packets by reducing traffic through the USB interface. If the
 traffic volume is not too high, you can use the `-f "all"` option to pass all
 traffic and only use Wireshark's filter options.
 
-I have only tested in a Linux environment.
+I have only tested in a Linux environment. It should be easy enough to adapt the script for Windows.
 
 Built with Arduino IDE 1.8.18 with ESP32 board add-on support.
 
@@ -22,7 +22,7 @@ Built with Arduino IDE 1.8.18 with ESP32 board add-on support.
   Build with:
     Board: "LilyGo T-DisplayS3"            -DARDUINO_LILYGO_T_DISPLAY_S3=1
     USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
-    USB CDC On Boot: "Enabled"             -DARDUINO_USB_CDC_ON_BOOT=1
+    USB CDC On Boot: "Disabled"            -DARDUINO_USB_CDC_ON_BOOT=0
     Upload Mode: "UART0 / Hardware CDC"
     Flash Size: "16MB (128Mb)"
     PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
@@ -32,10 +32,10 @@ Built with Arduino IDE 1.8.18 with ESP32 board add-on support.
   Build with:
     Board: "ESP32S3-Dev Module"            -DARDUINO_ESP32S3_DEV=1
     USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
-    USB CDC On Boot: "Enabled"             -DARDUINO_USB_CDC_ON_BOOT=1
+    USB CDC On Boot: "Disabled"            -DARDUINO_USB_CDC_ON_BOOT=0
     Upload Mode: "UART0 / Hardware CDC"
     Flash Size: "16MB (128Mb)"
-    PSRAM: "disabled"                      not available
+    PSRAM: "disabled"                      none
 ```
 
 **Other Modules**
@@ -52,11 +52,11 @@ Run the python script in `extras/` with `--help` for more information on how to 
 
 ## Known Issues, Behaviors, and Nuances
 
-* TFCard not supported at this time, -DUDB_MSC=1. It is not reliable. USB drive randomly disconnects.
+* The T-Dongle-S3 fails when using the TFCard and streaming PCAP to Wireshark. Additionally, I am starting to recognize some thermal issues with my T-Dongle-S3. If you leave out the TFCard, it works fine. Also, it works fine if you use the TFCard and don't stream PCAP packets.
 
 * Linux appears to drop key-strokes when the USB CDC is busy with Wireshark. Setting filters on the ESP32 side helps to a degree.
 
-* The dropped packet count is set to 0 when a new connection is made as indicated by DTR going high. It is normal to see some dropped packets counted during disconnect. While disconnected, the queuing of packet continues; however, without a host connection, they are cleared in the worker thread and are not counted as dropped.
+* When a new connection is made (as indicated by DTR going high), the dropped packet count resets. It is normal to see some dropped packets counted during disconnect. While disconnected, the queuing of packets continue; however, without a host connection, they are cleared in the worker thread and are not counted as dropped.
 
 * Filtering:
   * SDK Filters, while in Promiscuous mode, an SDK defined filter can be registered with the SDK.
