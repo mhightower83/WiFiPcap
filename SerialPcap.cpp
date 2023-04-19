@@ -22,6 +22,7 @@
    The use of stdin on Wireshark requires PCAP Version 2.4
      https://wiki.wireshark.org/CaptureSetup/Pipes.md
 */
+#include "WiFiPcap.ino.globals.h"
 
 #include "KConfig.h"
 #include <Arduino.h>

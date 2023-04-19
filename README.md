@@ -10,16 +10,17 @@ help avoid dropped packets by reducing traffic through the USB interface. If the
 traffic volume is not too high, you can use the `-f "all"` option to pass all
 traffic and only use Wireshark's filter options.
 
-I have only tested in a Linux environment. It should be easy enough to adapt the script for Windows.
+I have mainly tested with Linux.
+Should now work on Windows. If you used a custom location to install Wireshark, you will need to fix the path to Wireshark at the top of the script. Look for `wireshark_path_win32`.
 
-Built with Arduino IDE 1.8.18 with ESP32 board add-on support.
+Built with Arduino IDE 1.8.19 with ESP32 board add-on support.
 
 
 ## Hardware modules tested
 
 **LilyGo T-Display-S3**
 ```
-  Build with:
+  Build with Tools selection:              (defines set)
     Board: "LilyGo T-DisplayS3"            -DARDUINO_LILYGO_T_DISPLAY_S3=1
     USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
     USB CDC On Boot: "Disabled"            -DARDUINO_USB_CDC_ON_BOOT=0
@@ -29,7 +30,7 @@ Built with Arduino IDE 1.8.18 with ESP32 board add-on support.
 ```
 **LilyGo T-Dongle-S3**
 ```
-  Build with:
+  Build with Tools selection:              (defines set)
     Board: "ESP32S3-Dev Module"            -DARDUINO_ESP32S3_DEV=1
     USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
     USB CDC On Boot: "Disabled"            -DARDUINO_USB_CDC_ON_BOOT=0
@@ -61,13 +62,61 @@ Run the python script in `extras/` with `--help` for more information on how to 
 * Filtering:
   * SDK Filters, while in Promiscuous mode, an SDK defined filter can be registered with the SDK.
   * Custom filters (OUI, MAC, session, etc.), at callback, additional filtering can be applied.
-  * Packets excluded by the SDK filter are not included in the Packet or "kps" count. In contrast, Packets excluded by the custom filter have already been counted before the processing begins.
+  * Packets excluded by the SDK filter are not included in the Packet or "kbps" count. In contrast, Packets excluded by the custom filter have already been counted before the processing begins.
 
 
-## Using `build_opt.h` or `mkbuildoptglobals.py` with Arduino ESP32
+## Using Global macros
+The issue addressed here is the absence of support in the Arduino IDE for global defines for libraries. The TFT_eSPI library needed for supporting LilyGo
+T-Dongle-S3 or LilyGo T-Display-S3 requires editing a library `.h` file.
 
-To use `mkbuildoptglobals.py`, you will need to create or update `platform.local.txt` or you
-can copy the globals parts from `WiFiPcap.ino.globals.h`'s comment block to
-`build_opt.h` minus the comments.
+If you are not using one of these modules or that library you can skip this
+issue. Other, build changes can be applied by editing `WiFiPcap.ino.globals.h`.
+Or, you can follow the library maintainers recommendation and directly edit the
+library files and track edits for each project that uses it. Every workaround has its own set of limitations. Personally I prefer [`mkbuildoptglobals.py`](https://github.com/mhightower83/WiFiPcap/wiki/Global-Build-Options).
 
-To install `mkbuildoptglobals.py` see [Global Build Options](https://github.com/mhightower83/WiFiPcap/wiki/Global-Build-Options)
+
+There are three choices for helping TFT_eSPI find the Hardware correct `tft_setup.h` file.
+1. `platform.local.txt`
+2. `mkbuildoptglobals.py`
+3. `build_opt.h`
+
+### `platform.local.txt`
+This may be the simplest solution. Add one of these lines to you
+`platform.local.txt` file. Remember to remove it when building other projects.
+
+For LilyGo T-Dongle-S3 with tools selection Board: "ESP32S3-Dev Module" and PSRAM: "disabled"
+```
+compiler.cpp.extra_flags=-I{build.source.path}/src/T-Dongle-S3/ -DARDUINO_LILYGO_T_DONGLE_S3=1
+```
+
+For LilyGo T-Display-S3 with tools selection Board: "ESP32S3-Dev Module" and PSRAM: "OPI PSRAM"
+```
+compiler.cpp.extra_flags=-I{build.source.path}/src/T-Display-S3/ -DARDUINO_LILYGO_T_DISPLAY_S3=1
+```
+
+### `mkbuildoptglobals.py`
+
+To use `mkbuildoptglobals.py`, you will need to create or update `platform.local.txt`.
+For instruction on installing `mkbuildoptglobals.py` see [Global Build Options](https://github.com/mhightower83/WiFiPcap/wiki/Global-Build-Options)
+
+### `build_opt.h`
+
+Or you can add one of these to `build_opt.h`:
+
+For LilyGo T-Dongle-S3 with tools selection Board: "ESP32S3-Dev Module" and PSRAM: "disabled"
+```
+-I"/home/userid/Arduino/WiFiPcap//src/T-Dongle-S3/"
+-DARDUINO_LILYGO_T_DONGLE_S3=1
+```
+
+For LilyGo T-Display-S3 with tools selection Board: "ESP32S3-Dev Module" and PSRAM: "OPI PSRAM"
+```
+-I"/home/userid/Arduino/WiFiPcap/src/T-Display-S3/"
+-DARDUINO_LILYGO_T_DISPLAY_S3=1
+```
+
+
+
+When using `build_opt.h`, build dependencies may not always work correctly due to Arduino IDE's aggressive caching. `mkbuildoptglobals.py` handles this issue.
+
+Otherwise, a complete shutdown of the Arduino IDE, open only one Sketch, build, and flash will work fine. With `build_opt.h`, the problem arises when you open a second Sketch and start building. Aggressive caching can use cached components that should have been rebuilt with the current Sketch's globals.

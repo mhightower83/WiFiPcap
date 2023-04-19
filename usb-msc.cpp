@@ -27,8 +27,9 @@
 
   I don't think I can judge if this works or not with my T-Dongle-S3.
 */
-#if USE_USB_MSC
+#include "WiFiPcap.ino.globals.h"
 
+#if USE_USB_MSC
 
 #if ARDUINO_USB_MODE
 #pragma message("This sketch should be used when USB is in OTG mode")

@@ -101,6 +101,8 @@
 */
 #endif
 
+#include "WiFiPcap.ino.globals.h"
+
 ////////////////////////////////////////////////////////////////////////////////
 // Device Module, Peripherals and Configurations
 #if ARDUINO_LILYGO_T_DISPLAY_S3

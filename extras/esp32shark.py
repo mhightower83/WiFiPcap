@@ -23,6 +23,7 @@
 
   References:
     Wireshark https://wiki.wireshark.org/CaptureSetup/Pipes.md
+    https://github.com/RIOT-OS/RIOT/blob/master/examples/sniffer/tools/sniffer.py
 '''
 
 import traceback
@@ -316,12 +317,17 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
     canBreak = False
     while not canBreak:
         try:
-            fd = serial.Serial(port, bpsRate)
+            ser = serial.Serial(None, bpsRate)
+            ser.port = port
+            ser.dtr = ser.rts = True
+            # ser.baudrate = bpsRate
+            ser.open()
+
             # interrupt stream or wakeup esp32
-            fd.write( b'\x04' )        # send ^D (EOT)
-            fd.write( b'\x12' )        # send ^R (DC2 - ready)
+            ser.write( b'\x04' )        # send ^D (EOT)
+            ser.write( b'\x12' )        # send ^R (DC2 - ready)
             time.sleep(0.1)
-            fd.reset_input_buffer()
+            ser.reset_input_buffer()
             canBreak = True
         except KeyboardInterrupt:
             return None
@@ -333,11 +339,11 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
                 print(f'[!] Serial port "{port}" open attempt failed!')
                 return None
 
-    print(f'[+] Connected to serial port: "{fd.name}"')
+    print(f'[+] Connected to serial port: "{ser.name}"')
 
     while True:
         try:
-            line = fd.readline()
+            line = ser.readline()
         except KeyboardInterrupt:
             return None
         except:
@@ -379,13 +385,13 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
         str += f'X\n'
 
     cmd = str.encode()
-    fd.write(cmd)
-    fd.flush()
+    ser.write(cmd)
+    ser.flush()
     print("[<] ESP32 <- {}".format(cmd))
 
     while True:
         try:
-            line = fd.readline()
+            line = ser.readline()
         except KeyboardInterrupt:
             return None
         except:
@@ -398,23 +404,59 @@ def connectESP32(port, channel, filter, unicast, multicast, time_sync):
             break
 
     print("[+] Stream started ...")
-    return fd
+    return ser
 
 
-def runWireshark(fd):
+def runWireshark(ser):
     print("[+] Starting Wireshark ...")
-    proc=subprocess.Popen([ wireshark_path, '-k', '-i', '-' ], stdin=fd)
+    proc=subprocess.Popen([ wireshark_path, '-k', '-i', '-' ], stdin=ser)
     proc.communicate()
     # cmd='wireshark -k -i -'
-    # proc=subprocess.Popen(shlex.split(cmd), stdin=fd, start_new_session=True)
-    # proc=subprocess.Popen(shlex.split(cmd), stdin=fd)
+    # proc=subprocess.Popen(shlex.split(cmd), stdin=ser, start_new_session=True)
+    # proc=subprocess.Popen(shlex.split(cmd), stdin=ser)
 
 
-def runWiresharkWin32(fd):
-    print("[!] At this time, Windows is not supported.")
+def runWiresharkWin32(ser):
+    import win32pipe, win32file
     print("[!] Experimental, Starting Wireshark ...")
-    proc=subprocess.Popen([ wireshark_path_win32, '-k', '-i', '-' ], stdin=fd)
-    proc.communicate()
+
+    #create the named pipe \\.\pipe\wireshark
+    pipe = win32pipe.CreateNamedPipe(
+        r'\\.\pipe\wireshark',
+        win32pipe.PIPE_ACCESS_OUTBOUND,
+        win32pipe.PIPE_TYPE_MESSAGE | win32pipe.PIPE_WAIT,
+        1, 65536, 65536,
+        300,
+        None)
+
+    proc=subprocess.Popen([ wireshark_path_win32, r'-k', r'-i', r'\\.\pipe\wireshark' ])
+
+    # https://stackoverflow.com/a/13319731
+    # pass serial pcap data through pipe to Wireshark
+    try:
+        win32pipe.ConnectNamedPipe(pipe, None)  # Wait for connection to pipe
+        print("[+] Pipe Connected")
+
+        while ser.is_open:
+            if 0 < ser.in_waiting:
+                data = ser.read(ser.in_waiting)
+                win32file.WriteFile(pipe, data)
+            else:
+                # Python processes typically use a single thread because of the GIL.
+                # We are all that is running? Do any of these libraries have
+                # background threads? Leave this sleep for now.
+                time.sleep(0.01)
+    except:
+        pass
+    finally:
+        pass
+
+    win32file.CloseHandle(pipe)
+    return None
+
+    print("[!] At this time, Windows is not supported.")
+    # proc=subprocess.Popen([ wireshark_path_win32, '-k', '-i', '-' ], stdin=ser)
+    # proc.communicate()
 
 
 def processAddress(unicast, oui):
@@ -492,21 +534,23 @@ def main():
     print(f'[+] set time      ="{args.time_sync}"')
     # sys.stdout.flush()
 
-    fd = connectESP32(port, args.channel, filter, unicast, multicast, args.time_sync)
-    if None == fd:
+    ser = connectESP32(port, args.channel, filter, unicast, multicast, args.time_sync)
+    if None == ser:
         print("[+] Exiting ...")
         return 1
 
     if not args.testing:
         system = platform.system()
         if "Windows" == system:
-            runWiresharkWin32(fd)
+            runWiresharkWin32(ser)
         else:
-            runWireshark(fd)
+            runWireshark(ser)
 
     try:
-        fd.write( b'\x04' )        # send ^D (EOT)
-        fd.close()
+        ser.write( b'\x04' )        # send ^D (EOT)
+        ser.flush()
+        ser.dtr = ser.rts = False
+        ser.close()
     except:
         pass
 
