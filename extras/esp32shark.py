@@ -22,6 +22,7 @@
   setting ESP32's filter, channel, and time options.
 
   References:
+    https://pyserial.readthedocs.io/en/latest/pyserial_api.html
     Wireshark https://wiki.wireshark.org/CaptureSetup/Pipes.md
     https://github.com/RIOT-OS/RIOT/blob/master/examples/sniffer/tools/sniffer.py
 '''
@@ -417,10 +418,12 @@ def runWireshark(ser):
 
 
 def runWiresharkWin32(ser):
+    # Ref. https://wiki.wireshark.org/CaptureSetup/Pipes.md#way-3-python-on-windows
+    # Ref. https://stackoverflow.com/a/13319731
     import win32pipe, win32file
     print("[!] Experimental, Starting Wireshark ...")
 
-    #create the named pipe \\.\pipe\wireshark
+    # create the named pipe \\.\pipe\wireshark
     pipe = win32pipe.CreateNamedPipe(
         r'\\.\pipe\wireshark',
         win32pipe.PIPE_ACCESS_OUTBOUND,
@@ -431,7 +434,6 @@ def runWiresharkWin32(ser):
 
     proc=subprocess.Popen([ wireshark_path_win32, r'-k', r'-i', r'\\.\pipe\wireshark' ])
 
-    # https://stackoverflow.com/a/13319731
     # pass serial pcap data through pipe to Wireshark
     try:
         win32pipe.ConnectNamedPipe(pipe, None)  # Wait for connection to pipe
@@ -453,10 +455,6 @@ def runWiresharkWin32(ser):
 
     win32file.CloseHandle(pipe)
     return None
-
-    print("[!] At this time, Windows is not supported.")
-    # proc=subprocess.Popen([ wireshark_path_win32, '-k', '-i', '-' ], stdin=ser)
-    # proc.communicate()
 
 
 def processAddress(unicast, oui):
