@@ -14,8 +14,9 @@
 // -DARDUINO_LILYGO_T_DONGLE_S3=1
 // // This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
 // // Update this path to point into your Sketch folder ./src/T-Display-S3/
-// -I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-Dongle-S3/"
+// // -I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-Dongle-S3/"
 */
+
 
 
 // If you chose to directly edit the TFT_eSPI library .h file, one of these
@@ -49,7 +50,9 @@ Build with Tools selection:              (defines set)
 // Has hardware support for Micro SDCard, but with the current Arduino Core USB
 // is unstable with this option. However, if the Micro SDCard is not plugged
 // in, it should be stable.
-#define USE_USB_MSC 1
+//
+// For now, don't build with SDCard support
+// #define USE_USB_MSC 1
 
 #elif ARDUINO_LILYGO_T_DISPLAY_S3
 /*
@@ -97,7 +100,7 @@ Build with Tools selection:              (defines set)
 // When no PSRAM is available, a small DRAM buffer can be used.
 // When both are not available the cache is disabled.
 // When both are defined PSRAM assumes Priority
-#ifndef !defined(USE_DRAM_CACHE) && !defined(BOARD_HAS_PSRAM)
+#if !defined(USE_DRAM_CACHE) && !defined(BOARD_HAS_PSRAM)
 #define USE_DRAM_CACHE (32*1024)
 #else
 #ifndef USE_DRAM_CACHE
