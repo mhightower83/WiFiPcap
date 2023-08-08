@@ -18,6 +18,7 @@
 */
 
 
+
 // If you chose to directly edit the TFT_eSPI library .h file, one of these
 // matching your ESP32S3 module will need to be uncommented.
 // #define ARDUINO_LILYGO_T_DISPLAY_S3 1
@@ -49,7 +50,9 @@ Build with Tools selection:              (defines set)
 // Has hardware support for Micro SDCard, but with the current Arduino Core USB
 // is unstable with this option. However, if the Micro SDCard is not plugged
 // in, it should be stable.
-#define USE_USB_MSC 1
+//
+// For now, don't build with SDCard support
+// #define USE_USB_MSC 1
 
 #elif ARDUINO_LILYGO_T_DISPLAY_S3
 /*
@@ -97,7 +100,7 @@ Build with Tools selection:              (defines set)
 // When no PSRAM is available, a small DRAM buffer can be used.
 // When both are not available the cache is disabled.
 // When both are defined PSRAM assumes Priority
-#ifndef !defined(USE_DRAM_CACHE) && !defined(BOARD_HAS_PSRAM)
+#if !defined(USE_DRAM_CACHE) && !defined(BOARD_HAS_PSRAM)
 #define USE_DRAM_CACHE (32*1024)
 #else
 #ifndef USE_DRAM_CACHE

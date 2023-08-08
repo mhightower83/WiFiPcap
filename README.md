@@ -53,7 +53,7 @@ Run the python script in `extras/` with `--help` for more information on how to 
 
 ## Known Issues, Behaviors, and Nuances
 
-* The T-Dongle-S3 fails when using the TFCard and streaming PCAP to Wireshark. Additionally, I am starting to recognize some thermal issues with my T-Dongle-S3. If you leave out the TFCard, it works fine. Also, it works fine if you use the TFCard and don't stream PCAP packets.
+* The T-Dongle-S3 fails when using the TFCard and streaming PCAP to Wireshark. Additionally, I am starting to recognize some thermal issues with my T-Dongle-S3. If you leave out the TFCard, it works fine. Also, it works fine if you use the TFCard and don't stream PCAP packets. For now let macro `USE_USB_MSC` default to `0`.
 
 * Linux appears to drop key-strokes when the USB CDC is busy with Wireshark. Setting filters on the ESP32 side helps to a degree.
 
