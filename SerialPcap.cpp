@@ -108,6 +108,8 @@ static SerialTask st;
 ////////////////////////////////////////////////////////////////////////////////
 //
 void reinit_serial(SerialTask *session) {
+// Skip until Serial.end()/Serial.begin() bugs in core are fixed.
+#if 0
     // This appears to be needed to recover from a failed start/sync
 #if ARDUINO_USB_MODE
     // HWCDC
@@ -130,6 +132,7 @@ void reinit_serial(SerialTask *session) {
     session->pcapSerial->setTxBufferSize(CONFIG_WIFIPCAP_SERIAL_TX_BUFFER_SIZE);
     session->pcapSerial->begin(CONFIG_WIFIPCAP_SERIAL_SPEED, SERIAL_8N1);
     #endif
+#endif
 #endif
     session->pcapSerial->setTimeout(k_serial_timeout);  // Stream wait for data
 }
@@ -957,7 +960,7 @@ esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter) {
     if (sz) {
         cust_fltr.cache_auth = (uintptr_t)ps_malloc(sz);
     } else {
-        sz = 64 * 1024u;    // Fallback to small DRAM buffer
+        sz = USE_DRAM_CACHE;    // Fallback to small DRAM buffer
         cust_fltr.cache_auth = (uintptr_t)malloc(sz);
     }
     cust_fltr.cache_next = cust_fltr.cache_auth;

@@ -80,19 +80,34 @@ extern USBCDC USBSerial;
 
 USBMSC MSC;
 #define MOUNT_POINT "/sdcard"
-sdmmc_card_t *card;
+struct TFCard {
+  const char *mount_point;
+  sdmmc_card_t *card;
+  struct {
+    esp_err_t sd;
+    bool msc;
+  } err;
 
-static struct {
-  esp_err_t sd=-1;
-  bool msc=false;
-} usb_err;
+  TFCard() {
+    card = NULL;
+    mount_point = MOUNT_POINT;
+    err.sd = -1;
+    err.msc = false;
+  }
+};
+TFCard tfc;
+
+// static struct {
+//   esp_err_t sd=-1;
+//   bool msc=false;
+// } usb_err;
 
 /*
   Initialize SD Driver that allows the ESP32 to read and write from the
   connected SD Card. Used to service request from the MSC Class.
 */
 esp_err_t sd_init(void) {
-    const char mount_point[] = MOUNT_POINT;
+    // const char mount_point[] = MOUNT_POINT;
 
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,
@@ -113,7 +128,7 @@ esp_err_t sd_init(void) {
            sector size.
         */
         //+ .allocation_unit_size = 16 * 1024 // Based on the above, this is a bit large
-        .allocation_unit_size = 0 // Based on the above, this is a bit large
+        .allocation_unit_size = 0
     };
     /*
       sdmmc_host_t structure initializer for SDMMC peripheral
@@ -174,10 +189,15 @@ esp_err_t sd_init(void) {
     slot_config.d1 = (gpio_num_t)SD_MMC_D1_PIN;
     slot_config.d2 = (gpio_num_t)SD_MMC_D2_PIN;
     slot_config.d3 = (gpio_num_t)SD_MMC_D3_PIN;
-    slot_config.d4 = GPIO_NUM_NC;
-    slot_config.d5 = GPIO_NUM_NC;
-    slot_config.d6 = GPIO_NUM_NC;
-    slot_config.d7 = GPIO_NUM_NC;
+    // slot_config.d4 = GPIO_NUM_NC;
+    // slot_config.d5 = GPIO_NUM_NC;
+    // slot_config.d6 = GPIO_NUM_NC;
+    // slot_config.d7 = GPIO_NUM_NC;
+    /*
+       DOCS: Please note that it is not advised to specify a Card Detect pin
+       when working with SDIO cards, because the card detect signal in ESP32 can
+       also trigger SDIO slave interrupt.
+     */
     slot_config.cd = SDMMC_SLOT_NO_CD;
     slot_config.wp = SDMMC_SLOT_NO_WP;
     slot_config.width = 4;
@@ -211,23 +231,52 @@ esp_err_t sd_init(void) {
     gpio_set_drive_capability((gpio_num_t)SD_MMC_D2_PIN,  drive_strength);
     gpio_set_drive_capability((gpio_num_t)SD_MMC_D3_PIN,  drive_strength);
 #endif
-    usb_err.sd = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
+    tfc.card = NULL;
+    tfc.err.sd = esp_vfs_fat_sdmmc_mount(tfc.mount_point, &host, &slot_config, &mount_config, &tfc.card);
+    /*
+      The Espressif DOCS say: "This function is intended to make example code
+      more compact. For real world applications, developers should implement the
+      logic of probing SD card, locating and mounting partition, and registering
+      FATFS in VFS, with proper error checking and handling of exceptional
+      conditions."
 
-    if (usb_err.sd != ESP_OK) {
-        // This may not going to be visable
-        if (usb_err.sd == ESP_FAIL) {
+      So the example code is not expected to work in a live application beyond
+      startup. Great! /s
+      Is this why the build is so flakey when this is included?! :(
+    */
+
+    if (tfc.err.sd != ESP_OK) {
+        /*
+        esp_vfs_fat_sdmmc_mount fail
+         * init_sdmmc_host - needs a slot deinit - not yet defined
+         * sdmmc_host_deinit
+         * sdmmc_host_init_slot
+       */
+
+        // With HWSerial, this may not be visable
+        if (tfc.err.sd == ESP_FAIL) {
             HWSerial.printf("Failed to mount filesystem. "
                               "If you want the card to be formatted, set the EXAMPLE_FORMAT_IF_MOUNT_FAILED menuconfig option.\n");
         } else
-        if (usb_err.sd == ESP_ERR_INVALID_STATE) {
+        if (tfc.err.sd == ESP_ERR_INVALID_STATE) {
             HWSerial.printf("SD Card Already mounted\n");
         } else {
             HWSerial.printf("Failed to initialize the card (%s). "
                              "Make sure SD card lines have pull-up resistors in place.\n",
-                             esp_err_to_name(usb_err.sd));
+                             esp_err_to_name(tfc.err.sd));
+        }
+        if (tfc.card) {
+            // I don't know if this is needed. If not null, maybe something
+            // needs to be freed.
+            esp_err_t err = esp_vfs_fat_sdcard_unmount(tfc.mount_point, tfc.card);
+            HWSerial.printf("%d = esp_vfs_fat_sdcard_unmount(%s, 0x%08X)\n", err, tfc.mount_point, (uintptr_t) tfc.card);
+            tfc.card = NULL;
+        } else {
+            // Already? called from esp_vfs_fat_sdmmc_mount() when it failed.
+            // host.deinit();  //?? // tfc.card->host.deinit() - sdmmc_host_deinit
         }
     }
-    return usb_err.sd;
+    return tfc.err.sd;
 }
 
 /*
@@ -241,15 +290,15 @@ inline static void *ptrPlusOff(void *start, size_t offset) {
 */
 static int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t *buffer, uint32_t bufsize) {
     // HWSerial.printf("MSC WRITE: lba: %u, offset: %u, bufsize: %u\n", lba, offset, bufsize);
-    uint32_t count = (bufsize / card->csd.sector_size);
-    sdmmc_write_sectors(card, ptrPlusOff(buffer, offset), lba, count);
+    uint32_t count = (bufsize / tfc.card->csd.sector_size);
+    sdmmc_write_sectors(tfc.card, ptrPlusOff(buffer, offset), lba, count);
     return bufsize;
 }
 
 static int32_t onRead(uint32_t lba, uint32_t offset, void *buffer, uint32_t bufsize) {
     // HWSerial.printf("MSC READ: lba: %u, offset: %u, bufsize: %u\n", lba, offset, bufsize);
-    uint32_t count = (bufsize / card->csd.sector_size);
-    sdmmc_read_sectors(card, ptrPlusOff(buffer, offset), lba, count);
+    uint32_t count = (bufsize / tfc.card->csd.sector_size);
+    sdmmc_read_sectors(tfc.card, ptrPlusOff(buffer, offset), lba, count);
     return bufsize;
 }
 
@@ -300,15 +349,19 @@ bool setupMsc() {
     MSC.onRead(onRead);
     MSC.onWrite(onWrite);
     MSC.mediaPresent(true);
-    usb_err.msc = MSC.begin(card->csd.capacity, card->csd.sector_size);
-    return usb_err.msc;
+    tfc.err.msc = MSC.begin(tfc.card->csd.capacity, tfc.card->csd.sector_size);
+    return tfc.err.msc;
 }
 
 void sd_end(void) {
-    const char mount_point[] = MOUNT_POINT;
-    // if (usb_err.msc) MSC.end();
-    // if (usb_err.sd == ESP_OK)
-    esp_vfs_fat_sdcard_unmount(mount_point, card);
+    // const char mount_point[] = MOUNT_POINT;
+    // if (tfc.err.msc) MSC.end();
+    // if (tfc.err.sd == ESP_OK)
+    if (tfc.card) {
+        esp_err_t err = esp_vfs_fat_sdcard_unmount(tfc.mount_point, tfc.card);
+        HWSerial.printf("%d = esp_vfs_fat_sdcard_unmount(%s, 0x%08X)\n", err, tfc.mount_point, (uintptr_t)tfc.card);
+        tfc.card = NULL;
+    }
 }
 
 #endif // #if ARDUINO_USB_MODE

@@ -48,10 +48,8 @@ Build with Tools selection:              (defines set)
 #define USE_DRAM_CACHE (32*1024)
 
 // Has hardware support for Micro SDCard, but with the current Arduino Core USB
-// is unstable with this option. However, if the Micro SDCard is not plugged
-// in, it should be stable.
-//
-// For now, don't build with SDCard support
+// is unstable with this option. The Last time I tested it does not matter if
+// the SDCard was connected or not. The ttyACM0 will go off line at some point.
 // #define USE_USB_MSC 1
 
 #elif ARDUINO_LILYGO_T_DISPLAY_S3

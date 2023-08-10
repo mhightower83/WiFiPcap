@@ -88,6 +88,20 @@
 //   ESP USB Bridge                    openocdscript=esp32s3-bridge.cfg,  copy_jtag_files=1
 //
 //
+/*
+  With WiFi, a distinction is made between Monitor and Promiscuous mode.
+  * https://security.stackexchange.com/a/37000
+  * Monitor - All in the air traffic is captured
+  * Promiscuous - only traffic associated with the connected AP
+  * TODO - Add support to connect to AP
+
+  Further study TST - timesync Packets
+  https://cseweb.ucsd.edu/classes/wi14/cse222A-a/lectures/222A-wi14-l17.pdf
+  https://www.usenix.org/system/files/atc21-chen.pdf
+  https://eecs.ceas.uc.edu/~cdmc/mass/mass2004/35232.pdf
+
+*/
+
 
 #if ARDUINO_USB_MODE
 #pragma message ("\n\nThis sketch works best with the 'USB-OTG (TinyUSB)' option\nSet -DARDUINO_USB_MODE=0, From Arduino IDE Tools->'USB Mode: 'USB-OTG (TinyUSB)'\n\n")
@@ -756,10 +770,11 @@ void setup() {
     #pragma message ("Don't mix HWCDC with USBMSC\n")
     #unset USE_USB_MSC
     #endif
+    USBSerial.onEvent(usbCdcEventCallback);
 #if ARDUINO_USB_CDC_ON_BOOT
-    USBSerial.onEvent(usbCdcEventCallback);
 #else
-    USBSerial.onEvent(usbCdcEventCallback);
+    USBSerial.setTxBufferSize(CONFIG_WIFIPCAP_SERIAL_TX_BUFFER_SIZE);
+    USBSerial.setTxTimeoutMs(0);
     USBSerial.begin();
 #endif
 

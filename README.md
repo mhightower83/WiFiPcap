@@ -53,9 +53,9 @@ Run the python script in `extras/` with `--help` for more information on how to 
 
 ## Known Issues, Behaviors, and Nuances
 
-* The T-Dongle-S3 fails when using the TFCard and streaming PCAP to Wireshark. Additionally, I am starting to recognize some thermal issues with my T-Dongle-S3. If you leave out the TFCard, it works fine. Also, it works fine if you use the TFCard and don't stream PCAP packets. For now let macro `USE_USB_MSC` default to `0`.
+* The T-Dongle-S3 has hardware support for a Micro SDCard (TFCard), but the current Arduino Core USB is unstable with this option. It does not matter if the SDCard is connected or not. The serial port ttyACM0 will go offline at some point. For a reliable build, omit `-DUSE_USB_MSC=1`. For now default to `0` via `WiFiPcap.ino.globals.h`.
 
-* Linux appears to drop key-strokes when the USB CDC is busy with Wireshark. Setting filters on the ESP32 side helps to a degree.
+* Linux appears to drop key-strokes when the USB CDC is busy with Wireshark. Setting filters on the ESP32 side helps to a degree. I am not sure about this issue. It exist without the USB CDC; however, it gets worse while running USB CDC with Wireshark. It may be an issue with my computer.
 
 * When a new connection is made (as indicated by DTR going high), the dropped packet count resets. It is normal to see some dropped packets counted during disconnect. While disconnected, the queuing of packets continue; however, without a host connection, they are cleared in the worker thread and are not counted as dropped.
 
