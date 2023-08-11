@@ -32,6 +32,7 @@
 #include "SerialPcap.h"
 #include "WiFiPcap.h"
 #include "Interlocks.h"
+#include "Screen.h"
 
 #ifndef USE_WIFIPCAP_FILTER_AP_SESSION
 #define USE_WIFIPCAP_FILTER_AP_SESSION 0
@@ -41,7 +42,7 @@
 USBCDC USBSerial(0);
 #endif
 
-static const char *TAG = "SerialPcap";
+static const char *TAG = "Pcap"; // "SerialPcap";
 #if RELEASE_BUILD
 #undef ESP_LOGI
 #define ESP_LOGI(t, fmt, ...)

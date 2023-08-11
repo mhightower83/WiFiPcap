@@ -18,7 +18,7 @@ Built with Arduino IDE 1.8.19 with ESP32 board add-on support.
 
 ## Hardware modules tested
 
-**LilyGo T-Display-S3**
+**[LilyGo T-Display-S3](https://github.com/Xinyuan-LilyGO/T-Display-S3)**
 ```
   Build with Tools selection:              (defines set)
     Board: "LilyGo T-DisplayS3"            -DARDUINO_LILYGO_T_DISPLAY_S3=1
@@ -28,7 +28,17 @@ Built with Arduino IDE 1.8.19 with ESP32 board add-on support.
     Flash Size: "16MB (128Mb)"
     PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
 ```
-**LilyGo T-Dongle-S3**
+**[LilyGo T-HMI](https://github.com/Xinyuan-LilyGO/T-HMI)**
+```
+  Build with Tools selection:              (defines set)
+    Board: "ESP32S3-Dev Module"            -DARDUINO_ESP32S3_DEV=1
+    USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
+    USB CDC On Boot: "Disabled"            -DARDUINO_USB_CDC_ON_BOOT=0
+    Upload Mode: "UART0 / Hardware CDC"
+    Flash Size: "16MB (128Mb)"
+    PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
+```
+**[LilyGo T-Dongle-S3](https://github.com/Xinyuan-LilyGO/T-Dongle-S3)**
 ```
   Build with Tools selection:              (defines set)
     Board: "ESP32S3-Dev Module"            -DARDUINO_ESP32S3_DEV=1
@@ -38,6 +48,8 @@ Built with Arduino IDE 1.8.19 with ESP32 board add-on support.
     Flash Size: "16MB (128Mb)"
     PSRAM: "disabled"                      none
 ```
+
+With these sets of options, you use the manual mode to put the device into flash mode. eg. Hold _Boot button_, the press and release the _Reset button_, and finish by releasing the _Boot button_.
 
 **Other Modules**
 
@@ -94,6 +106,11 @@ For LilyGo T-Display-S3 with tools selection Board: "ESP32S3-Dev Module" and PSR
 compiler.cpp.extra_flags=-I{build.source.path}/src/T-Display-S3/ -DARDUINO_LILYGO_T_DISPLAY_S3=1
 ```
 
+For LilyGo T-HMI with tools selection Board: "ESP32S3-Dev Module" and PSRAM: "OPI PSRAM"
+```
+compiler.cpp.extra_flags=-I{build.source.path}/src/T-HMI/ -DARDUINO_LILYGO_T_HMI=1
+```
+
 ### `mkbuildoptglobals.py`
 
 To use `mkbuildoptglobals.py`, you will need to create or update `platform.local.txt`.
@@ -105,7 +122,7 @@ Or you can add one of these to `build_opt.h`:
 
 For LilyGo T-Dongle-S3 with tools selection Board: "ESP32S3-Dev Module" and PSRAM: "disabled"
 ```
--I"/home/userid/Arduino/WiFiPcap//src/T-Dongle-S3/"
+-I"/home/userid/Arduino/WiFiPcap/src/T-Dongle-S3/"
 -DARDUINO_LILYGO_T_DONGLE_S3=1
 ```
 
@@ -115,7 +132,11 @@ For LilyGo T-Display-S3 with tools selection Board: "ESP32S3-Dev Module" and PSR
 -DARDUINO_LILYGO_T_DISPLAY_S3=1
 ```
 
-
+For LilyGo T-HMI with tools selection Board: "ESP32S3-Dev Module" and PSRAM: "OPI PSRAM"
+```
+-I"/home/userid/Arduino/WiFiPcap/src/T-HMI/"
+-DARDUINO_LILYGO_T_HMI=1
+```
 
 When using `build_opt.h`, build dependencies may not always work correctly due to Arduino IDE's aggressive caching. `mkbuildoptglobals.py` handles this issue.
 

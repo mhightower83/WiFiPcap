@@ -108,15 +108,18 @@ static inline uint32_t interlocked_read(volatile uint32_t *addr) {
 //         return newval;
 // }
 
-// static inline void* interlocked_write(volatile void* *addr, void *val) {
-//     // void* val;
-//     __asm__ __volatile__ (
-//         "    s32ai   %[val],  %[addr], 0 \n"
-//         :
-//         : [val]"a"(val), [addr]"a"(addr)
-//         : "memory");
-//         return val;
-// }
+static inline void* interlocked_write(volatile void* *addr, void *val) {
+    // void* val;
+    __asm__ __volatile__ (
+        "    s32ri   %[val],  %[addr], 0 \n"
+        : [val]"+a"(val)
+        : [addr]"a"(addr)
+        : "memory");
+        return val;
+}
+static inline uint32_t interlocked_write(volatile uint32_t *addr, uint32_t val) {
+    return (uint32_t)interlocked_write((volatile void* *)addr, (void *)val);
+}
 #endif
 
 

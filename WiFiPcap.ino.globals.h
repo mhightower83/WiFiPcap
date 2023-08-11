@@ -11,6 +11,11 @@
 // // Update this path to point into your Sketch folder ./src/T-Display-S3/
 // -I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-Display-S3/"
 
+-DARDUINO_LILYGO_T_HMI=1
+// This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
+// Update this path to point into your Sketch folder ./src/T-Display-S3/
+-I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-HMI/"
+
 // -DARDUINO_LILYGO_T_DONGLE_S3=1
 // // This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
 // // Update this path to point into your Sketch folder ./src/T-Display-S3/
@@ -18,10 +23,10 @@
 */
 
 
-
 // If you chose to directly edit the TFT_eSPI library .h file, one of these
 // matching your ESP32S3 module will need to be uncommented.
 // #define ARDUINO_LILYGO_T_DISPLAY_S3 1
+// #define ARDUINO_LILYGO_T_HMI 1
 // #define ARDUINO_LILYGO_T_DONGLE_S3  1
 
 
@@ -65,6 +70,24 @@ Build with Tools selection:              (defines set)
   PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
 */
 #define USE_USB_MSC 0
+
+#elif ARDUINO_LILYGO_T_HMI
+/*
+Using LilyGo T-HMI
+
+Build with Tools selection:              (defines set)
+  Board: "ESP32S3-Dev Module"            -DARDUINO_ESP32S3_DEV=1
+  USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
+  USB CDC On Boot: "Disabled"            -DARDUINO_USB_CDC_ON_BOOT=0
+  Upload Mode: "UART0 / Hardware CDC"
+  Flash Size: "16MB (128Mb)"
+  PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
+*/
+
+// Has hardware support for Micro SDCard, but with the current Arduino Core USB
+// is unstable with this option. The Last time I tested it does not matter if
+// the SDCard was connected or not. The ttyACM0 will go off line at some point.
+// #define USE_USB_MSC 1
 
 #else
 /*
@@ -117,5 +140,14 @@ Build with Tools selection:              (defines set)
 #define RELEASE_BUILD (0)
 #endif
 #endif
+
+
+
+
+// #undef RELEASE_BUILD
+// #define RELEASE_BUILD (0)
+
+
+
 
 #endif // WIFIPCAP_INO_GLOBALS_H

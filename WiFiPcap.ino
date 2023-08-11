@@ -44,6 +44,17 @@
       Upload Mode: "UART0 / Hardware CDC"
       PSRAM: "Disabled"                      none
 
+  LilyGo T-HMI
+
+    Build with:
+      Board: "ESP32S3-Dev Module"            -DARDUINO_ESP32S3_DEV=1
+      USB Mode: "USB-OTG (TinyUSB)"          -DARDUINO_USB_MODE=0
+      USB CDC On Boot: "Disabled"            -DARDUINO_USB_CDC_ON_BOOT=0
+      Upload Mode: "UART0 / Hardware CDC"
+      Flash Size: "16MB (128Mb)"
+      PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
+
+
   All USB options that require TinyUSB should have "Disabled" selected.
 
   Wireshark links
@@ -117,6 +128,13 @@
 
 #include "WiFiPcap.ino.globals.h"
 
+enum Orientation {
+    portrait = 0,
+    landscape = 1,
+    portrait_flip = 2,
+    landscape_flip = 3
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 // Device Module, Peripherals and Configurations
 #if ARDUINO_LILYGO_T_DISPLAY_S3
@@ -124,12 +142,24 @@
 #include "src/T-Display-S3/tft_setup.h"
 
 #define USE_DISPLAY 1
+#define USE_LANSCAPE 1
 #define FLIP_DISPLAY 1
 #define USE_LED_CONTROL 1
 
 /* Please make sure your touch IC model. */
 #define TOUCH_MODULES_CST_MUTUAL // This is the correct Touch screen for me
 // #define TOUCH_MODULES_CST_SELF
+
+#elif ARDUINO_LILYGO_T_HMI
+#include "src/T-HMI/pin_config.h"
+#include "src/T-HMI/tft_setup.h"
+#include "src/T-HMI/data.h"
+
+#define USE_DISPLAY 1
+#define USE_LANSCAPE 0    // portrait
+#define FLIP_DISPLAY 0
+#define USE_LED_CONTROL 1
+
 
 #elif ARDUINO_LILYGO_T_DONGLE_S3
 // -DARDUINO_ESP32S3_DEV=1 is usually present
@@ -138,12 +168,14 @@
 #include "src/T-Dongle-S3/tft_setup.h"
 
 #define USE_DISPLAY 1
+#define USE_LANSCAPE 1
 #define FLIP_DISPLAY 1
 #define USE_LED_CONTROL 0
 
 #else
 #pragma warning("Unfamiliar Hardware. Check ESP32 Board selection and build settings.")
 #define USE_DISPLAY 0
+#undef USE_LANSCAPE
 #define FLIP_DISPLAY 0
 #define USE_LED_CONTROL 0
 #endif
@@ -165,7 +197,6 @@
 
 
 #if ARDUINO_LILYGO_T_DISPLAY_S3
-#include "src/Free_Fonts.h"
 // The ARDUINO_LILYGO_T_DISPLAY_S3 module uses parallel for Display
 // Please make sure your touch IC model.
 #define TOUCH_MODULES_CST_MUTUAL // This is the correct Touch screen
@@ -173,14 +204,17 @@
 #include <TouchLib.h>
 #include <Wire.h>
 
-#elif ARDUINO_LILYGO_T_DONGLE_S3
-#include "src/Free_Fonts.h"
+#elif ARDUINO_LILYGO_T_HMI
 #include <SPI.h>
-#include <TFT_eSPI.h>
+#include <xpt2046.h>
+
+#elif ARDUINO_LILYGO_T_DONGLE_S3
+#include <SPI.h>
 
 #else
 #endif // ARDUINO_LILYGO_T_DISPLAY_S3
 
+#include "Screen.h"
 
 #if defined(PIN_BUTTON_1) || defined(PIN_BUTTON_2)
 #include <OneButton.h>
@@ -222,8 +256,6 @@ using namespace std;
 #endif
 
 static const char *TAG = "WiFi";
-
-
 #if RELEASE_BUILD
 #undef ESP_LOGI
 #define ESP_LOGI(t, fmt, ...)
@@ -246,8 +278,6 @@ constexpr uint32_t kLcdBLMaxLevel = (1 << kLedBLResolution) - 1;
 constexpr uint32_t kLcdBLMaxLevel = 255;
 #endif
 
-ScreenState screen;
-
 #if ARDUINO_LILYGO_T_DISPLAY_S3
 #if defined(TOUCH_MODULES_CST_MUTUAL)
 TouchLib touch(Wire, PIN_IIC_SDA, PIN_IIC_SCL, CTS328_SLAVE_ADDRESS, PIN_TOUCH_RES);
@@ -258,13 +288,45 @@ TouchLib touch(Wire, PIN_IIC_SDA, PIN_IIC_SCL, CTS820_SLAVE_ADDRESS, PIN_TOUCH_R
 #if TOUCH_GET_FORM_INT
 bool get_int = false;
 #endif
+
+#elif ARDUINO_LILYGO_T_HMI
+#include <vector>
+XPT2046 touch = XPT2046(SPI, TOUCHSCREEN_CS_PIN, TOUCHSCREEN_IRQ_PIN);
+touch_calibration_t calibration_data[4];
+std::vector<touch_calibration_t> raw_data;
+
+// TODO: You need a comment for what this is about
+#if TOUCH_GET_FORM_INT
+bool get_int = false;
+#endif
+
 #endif // ARDUINO_LILYGO_T_DISPLAY_S3
 
+#if USE_LANSCAPE
 // Landscape orientation
+#if FLIP_DISPLAY
+constexpr uint8_t display_orientation = Orientation::landscape_flip;
+#else
+constexpr uint8_t display_orientation = Orientation::landscape;
+#endif
 constexpr int32_t kMaxWidth  = TFT_HEIGHT;
 constexpr int32_t kMaxX      = TFT_HEIGHT - 1;
 constexpr int32_t kMaxHeight = TFT_WIDTH;
 constexpr int32_t kMaxY      = TFT_WIDTH - 1;
+
+#else
+// Portrait
+#if FLIP_DISPLAY
+constexpr uint8_t display_orientation = Orientation::portrait_flip;
+#else
+constexpr uint8_t display_orientation = Orientation::portrait;
+#endif
+constexpr int32_t kMaxWidth  = TFT_WIDTH;
+constexpr int32_t kMaxX      = TFT_WIDTH - 1;
+constexpr int32_t kMaxHeight = TFT_HEIGHT;
+constexpr int32_t kMaxY      = TFT_HEIGHT - 1;
+#endif
+
 #endif // USE_DISPLAY
 
 
@@ -735,6 +797,10 @@ void setup() {
     digitalWrite(PIN_TOUCH_RES, LOW);
     delay(500);
     digitalWrite(PIN_TOUCH_RES, HIGH);
+
+#elif ARDUINO_LILYGO_T_HMI
+    pinMode(PWR_EN_PIN, OUTPUT);
+    digitalWrite(PWR_EN_PIN, HIGH);
 #endif
 
     HWSerial.begin(115200);
@@ -819,14 +885,8 @@ void setup() {
     // https://github.com/Bodmer/TFT_eSPI/issues/1908
     // https://github.com/espressif/arduino-esp32/issues/6737
     tft.begin();
+    tft.setRotation(display_orientation);
     tft.setSwapBytes(true);
-    // Screen orientation Landscape
-#ifdef FLIP_DISPLAY
-    // Flip Screen Vertically
-    tft.setRotation(3);
-#else
-    tft.setRotation(1);
-#endif
 
 #if USE_SHOW_SPLASH_IMG
     tft.pushImage(0, 0, 320, 170, (uint16_t *)img_logo);
@@ -853,28 +913,55 @@ void setup() {
     #endif
     setBL(kLcdBLMaxLevel);
 #endif
+#if ARDUINO_LILYGO_T_HMI
+    scrollSetup();
+    // Change color for scrolling zone text
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+#endif
 
 #if ARDUINO_LILYGO_T_DISPLAY_S3
     Wire.begin(PIN_IIC_SDA, PIN_IIC_SCL);
     if (!touch.init()) {
       USBSerial.println("Touch IC not found");
     }
-#if TOUCH_GET_FORM_INT
+    #if TOUCH_GET_FORM_INT
     attachInterrupt(PIN_TOUCH_INT, [] { get_int = true; }, FALLING);
-#endif
+    #endif
+
+#elif ARDUINO_LILYGO_T_HMI
+    #if USE_CALIBRATION_DATA
+    data_init();
+    data_read(calibration_data);
+    #endif
+    SPI.begin(TOUCHSCREEN_SCLK_PIN, TOUCHSCREEN_MISO_PIN, TOUCHSCREEN_MOSI_PIN);
+    touch.begin(240, 320);
+
+    #if USE_CALIBRATION_DATA
+    touch.setCal(calibration_data[0].rawX, calibration_data[2].rawX, calibration_data[0].rawY, calibration_data[2].rawY, 240, 320); // Raw xmin, xmax, ymin, ymax, width, height
+    #else
+    touch.setCal(1788, 285, 1877, 311, 240, 320); // Raw xmin, xmax, ymin, ymax, width, height
+    Serial.println("Use default calibration data");
+    LCDPost("Use default calibration data");
+    #endif
+
+    touch.setRotation(display_orientation);
 #endif
 
     screen.saver_time =
     screen.dim_time = millis();
     screen.dim = kLcdBLMaxLevel;
     screen.on = true;
+    screen.lock = 0;
+    screen.locked_count = 0;
 #endif //  USE_DISPLAY
     wifi_promis_init();
 
 #ifdef PIN_BUTTON_1
     button1.attachClick([]() { nextChannel(); });
     button1.attachDoubleClick([]() { prevChannel(); });
+    #if ! defined(ARDUINO_LILYGO_T_HMI)
     button1.attachLongPressStart([]() { toggleScreen(); } );
+    #endif
 #endif
 #ifdef PIN_BUTTON_2
     button2.attachClick([]() { prevChannel(); });
@@ -894,6 +981,7 @@ void setup() {
     if (ESP_OK != serial_pcap_start(&USBSerial, init_custom_filter)) {
         ESP_LOGE(TAG, "Serial pcap failed to start.");
     }
+    LCDPost("Serial pcap running.");
 
     delay(100);
     printMemory(HWSerial);
@@ -918,17 +1006,31 @@ void userIO() {
 #endif
 
 #if ARDUINO_LILYGO_T_DISPLAY_S3
-    // On idle, screen fades to black and turn back on with a touch
     bool touched = false;
-#if TOUCH_GET_FORM_INT
+    #if TOUCH_GET_FORM_INT
     if (get_int) {
         get_int = 0;
         touch.read();
         touched = true;
     }
-#else
+    #else
     if (touch.read()) touched = true;
-#endif
+    #endif
+
+#elif ARDUINO_LILYGO_T_HMI
+    [[maybe_unused]] bool touched = touch.pressed();
+    [[maybe_unused]] int tX = -1;
+    [[maybe_unused]] int tY = -1;
+    #if 0
+    if (touched) {
+        tX = touch.X();
+        tY = touch.Y();
+    }
+    #endif
+#endif //#if ARDUINO_LILYGO_T_DISPLAY_S3
+
+#if ARDUINO_LILYGO_T_DISPLAY_S3 || ARDUINO_LILYGO_T_HMI
+    // On idle, screen fades to black and turn back on with a touch
     if (touched) {
         if (!screen.on) {
             screen.on = true;
@@ -952,7 +1054,7 @@ void userIO() {
             }
         }
     }
-#endif //#if ARDUINO_LILYGO_T_DISPLAY_S3
+#endif  // #if ARDUINO_LILYGO_T_DISPLAY_S3 || ARDUINO_LILYGO_T_HMI
 }
 
 
@@ -972,6 +1074,7 @@ inline void refreshScreen(void) {
     screen.refresh = true;
 }
 
+#if ARDUINO_LILYGO_T_DISPLAY_S3 || ARDUINO_LILYGO_T_DONGLE_S3
 void selectScreen(const size_t select) {
     if (select == screen.select) return;
 
@@ -995,11 +1098,21 @@ void toggleScreen() {
     }
 }
 #endif
+#endif
 
 
-#if ARDUINO_LILYGO_T_DISPLAY_S3
+#if ARDUINO_LILYGO_T_DISPLAY_S3 || ARDUINO_LILYGO_T_HMI
 void updateScreen(size_t chView) {
     if (0 != screen.select) return;
+    if (! screenAcquire()) return;
+
+    #if ARDUINO_LILYGO_T_HMI
+    // TODO use this to split the screen for debug messages, etc.
+    // Leave half the screen for debug logging
+    constexpr int32_t reserveHeight = TFT_HEIGHT / 2;
+    #else
+    constexpr int32_t reserveHeight = 0;
+    #endif
 
     size_t i = chView - 1;
     uint32_t bps = get_bps();
@@ -1011,8 +1124,9 @@ void updateScreen(size_t chView) {
 
     int32_t xPos = 0;
     int32_t h = tft.fontHeight(GFXFF);
-    int32_t gap = (kMaxHeight - lines * h) / (lines + 1);
-    int32_t yPos = (gap + h) / 2;
+    int32_t gap = (kMaxHeight - reserveHeight - lines * h) / (lines + 1);
+    const int32_t top = (gap + h) / 2;
+    int32_t yPos = top;
     int32_t sz = 0;
 
     tft.setTextColor(TFT_BROWN, TFT_BLACK);
@@ -1040,7 +1154,8 @@ void updateScreen(size_t chView) {
     tft.setFreeFont(FSS9);
     const int32_t xStart = kMaxWidth/2;
     xPos = kMaxX;
-    yPos = gap;
+    yPos = top;
+    //D yPos = gap;
     if (i != last_i) {
         tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
         tft.drawString(String(chView), xPos, yPos, font);
@@ -1075,6 +1190,8 @@ void updateScreen(size_t chView) {
     tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
     tft.drawString(String(cs[i].total), xPos, yPos, font);
     last_i = i;
+
+    screenRelease();
 }
 
 #elif ARDUINO_LILYGO_T_DONGLE_S3
