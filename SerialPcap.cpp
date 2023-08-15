@@ -42,7 +42,7 @@
 USBCDC USBSerial(0);
 #endif
 
-static const char *TAG = "Pcap"; // "SerialPcap";
+[[maybe_unused]] static const char *TAG = "Pcap"; // "SerialPcap";
 #if RELEASE_BUILD
 #undef ESP_LOGI
 #define ESP_LOGI(t, fmt, ...)

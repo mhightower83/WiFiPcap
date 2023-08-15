@@ -11,15 +11,26 @@
 // // Update this path to point into your Sketch folder ./src/T-Display-S3/
 // -I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-Display-S3/"
 
--DARDUINO_LILYGO_T_HMI=1
-// This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
-// Update this path to point into your Sketch folder ./src/T-Display-S3/
--I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-HMI/"
+// -DARDUINO_LILYGO_T_HMI=1
+// // This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
+// // Update this path to point into your Sketch folder ./src/T-Display-S3/
+// -I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-HMI/"
 
 // -DARDUINO_LILYGO_T_DONGLE_S3=1
 // // This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
 // // Update this path to point into your Sketch folder ./src/T-Display-S3/
 // -I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-Dongle-S3/"
+
+// Note, nuisance warnings from library when building ARDUINO_LILYGO_T_DONGLE_S3
+// In file included from /home/mhightow/Arduino/libraries/TFT_eSPI/TFT_eSPI.cpp:20:
+// .../libraries/TFT_eSPI/Processors/TFT_eSPI_ESP32_S3.c: In member function 'bool TFT_eSPI::initDMA(bool)':
+// .../libraries/TFT_eSPI/Processors/TFT_eSPI_ESP32_S3.c:849:3: warning: missing initializer for member 'spi_bus_config_t::data4_io_num' [-Wmissing-field-initializers]
+//    };
+//    ^
+// .../libraries/TFT_eSPI/Processors/TFT_eSPI_ESP32_S3.c:849:3: warning: missing initializer for member 'spi_bus_config_t::data5_io_num' [-Wmissing-field-initializers]
+// .../libraries/TFT_eSPI/Processors/TFT_eSPI_ESP32_S3.c:849:3: warning: missing initializer for member 'spi_bus_config_t::data6_io_num' [-Wmissing-field-initializers]
+// .../libraries/TFT_eSPI/Processors/TFT_eSPI_ESP32_S3.c:849:3: warning: missing initializer for member 'spi_bus_config_t::data7_io_num' [-Wmissing-field-initializers]
+
 */
 
 
@@ -140,14 +151,5 @@ Build with Tools selection:              (defines set)
 #define RELEASE_BUILD (0)
 #endif
 #endif
-
-
-
-
-// #undef RELEASE_BUILD
-// #define RELEASE_BUILD (0)
-
-
-
 
 #endif // WIFIPCAP_INO_GLOBALS_H

@@ -30,10 +30,10 @@ static inline bool interlocked_compare_exchange(volatile void* *addr, void* cons
     __asm__ __volatile__ (
         "    wsr.scompare1 %[testval] \n"
         "    s32c1i %[setval_oldval], %[addr], 0 \n"
-        : [setval_oldval]"+a"(setval_oldval)
+        : [setval_oldval]"+&a"(setval_oldval)
         : [testval]"a"(testval), [addr]"a"(addr)
         : "memory");
-        return setval_oldval == testval;
+    return setval_oldval == testval;
 }
 
 static inline bool interlocked_compare_exchange(volatile uint32_t *addr, uint32_t const testval, uint32_t const setval) {
@@ -58,22 +58,23 @@ static inline uint32_t interlocked_read(volatile uint32_t *addr) {
 }
 
 
-// static inline void * interlocked_exchange(volatile void **addr, void* const newval) {
-//     void* oldval;
-//     void* newold;
-//     __asm__ __volatile__ (
-//         "1: \n"
-//         "    mov    %[newold],  %[newval] \n"
-//         "    l32ai  %[oldval],  %[addr], 0 \n"
-//         "    wsr.scompare1      %[oldval] \n"
-//         "    s32c1i %[newold],  %[addr], 0 \n"
-//         "    bne    %[newold],  %[oldval], 1b: \n"
-//         : [oldval]"=&a"(oldval), [newold]"=&a"(newold)
-//         : [newval]"a"(newval), [addr]"a"(addr)
-//         : "memory");
-//         return oldval;
-// }
+static inline void * interlocked_exchange(volatile void **addr, void* const newval) {
+    void* oldval;
+    void* newold;
+    __asm__ __volatile__ (
+        "1: \n"
+        "    mov    %[newold],  %[newval] \n"
+        "    l32ai  %[oldval],  %[addr], 0 \n"
+        "    wsr.scompare1      %[oldval] \n"
+        "    s32c1i %[newold],  %[addr], 0 \n"
+        "    bne    %[newold],  %[oldval], 1b \n"
+        : [oldval]"=&a"(oldval), [newold]"=&a"(newold)
+        : [newval]"a"(newval), [addr]"a"(addr)
+        : "memory");
+        return oldval;
+}
 
+// Untested - WIP - don't need this yet
 // static inline void * interlocked_add(volatile void **addr, volatile void **valaddr) {
 //     void* oldval;
 //     void* newval;
@@ -84,29 +85,32 @@ static inline uint32_t interlocked_read(volatile uint32_t *addr) {
 //         "    add    %[newval],  %[oldval] \n"
 //         "    wsr.scompare1      %[oldval] \n"
 //         "    s32c1i %[newval],  %[addr], 0 \n"
-//         "    bne    %[newval],  %[oldval], 1b: \n"
+//         "    bne    %[newval],  %[oldval], 1b \n"
 //         : [oldval]"=&a"(oldval), [newval]"=&a"(newval)
 //         : [addr]"a"(addr), [valaddr]"a"(valaddr)
 //         : "memory");
 //         return newval;
 // }
 
-// static inline void * interlocked_add(volatile void **addr, volatile void *val) {
-//     void* oldval;
-//     void* newval;
-//     __asm__ __volatile__ (
-//         "1: \n"
-//         "    mov    %[newval],  %[val], 0 \n"
-//         "    l32ai  %[oldval],  %[addr], 0 \n"
-//         "    add    %[newval],  %[oldval] \n"
-//         "    wsr.scompare1      %[oldval] \n"
-//         "    s32c1i %[newval],  %[addr], 0 \n"
-//         "    bne    %[newval],  %[oldval], 1b: \n"
-//         : [oldval]"=&a"(oldval), [newval]"=&a"(newval)
-//         : [addr]"a"(addr), [val]"a"(val)
-//         : "memory");
-//         return newval;
-// }
+// Status - not heavly test, but seems to work
+static inline void * interlocked_add(volatile void **addr, void* const val) {
+    void* oldval;
+    void* newval;
+    __asm__ __volatile__ (
+        "1: \n"
+        "    l32ai  %[oldval],  %[addr], 0 \n"
+        "    add    %[newval],  %[oldval],  %[val] \n"
+        "    wsr.scompare1      %[oldval] \n"
+        "    s32c1i %[newval],  %[addr], 0 \n"
+        "    bne    %[newval],  %[oldval], 1b \n"
+        : [oldval]"=&a"(oldval), [newval]"=&a"(newval)
+        : [addr]"a"(addr), [val]"a"(val)
+        : "memory");
+        return newval;
+}
+static inline uint32_t interlocked_add(volatile uint32_t *addr, const uint32_t val) {
+  return (uint32_t)interlocked_add((volatile void **)addr, (void*)val);
+}
 
 static inline void* interlocked_write(volatile void* *addr, void *val) {
     // void* val;

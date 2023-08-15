@@ -255,7 +255,7 @@ using namespace std;
 #error "Both ARDUINO_LILYGO_T_DISPLAY_S3 and ARDUINO_LILYGO_T_DONGLE_S3 are defined"
 #endif
 
-static const char *TAG = "WiFi";
+[[maybe_unused]] static const char *TAG = "WiFi";
 #if RELEASE_BUILD
 #undef ESP_LOGI
 #define ESP_LOGI(t, fmt, ...)
@@ -727,8 +727,8 @@ void usbCdcEventCallback(void* arg, esp_event_base_t event_base, int32_t event_i
                 break;
             case ARDUINO_USB_CDC_LINE_CODING_EVENT:
                 {
-                  const char parityChar[] ="NOEMSU";
-                  const char *stopBitsChar[4] = { "1", "1.5", "2", "U" }; // 0: 1 stop bit - 1: 1.5 stop bits - 2: 2 stop bits
+                  [[maybe_unused]] const char parityChar[] ="NOEMSU";
+                  [[maybe_unused]] const char *stopBitsChar[4] = { "1", "1.5", "2", "U" }; // 0: 1 stop bit - 1: 1.5 stop bits - 2: 2 stop bits
                   size_t parity = data->line_coding.parity; // 0: None - 1: Odd - 2: Even - 3: Mark - 4: Space
                   size_t stop_bits = data->line_coding.stop_bits; // 0: None - 1: Odd - 2: Even - 3: Mark - 4: Space
                   if (parity > 5) parity = 5; // Unknown
@@ -937,6 +937,7 @@ void setup() {
     touch.begin(240, 320);
 
     #if USE_CALIBRATION_DATA
+    // Place holder - No Further calibration logic writen at this time.
     touch.setCal(calibration_data[0].rawX, calibration_data[2].rawX, calibration_data[0].rawY, calibration_data[2].rawY, 240, 320); // Raw xmin, xmax, ymin, ymax, width, height
     #else
     touch.setCal(1788, 285, 1877, 311, 240, 320); // Raw xmin, xmax, ymin, ymax, width, height
@@ -1107,33 +1108,44 @@ void updateScreen(size_t chView) {
     if (! screenAcquire()) return;
 
     #if ARDUINO_LILYGO_T_HMI
-    // TODO use this to split the screen for debug messages, etc.
-    // Leave half the screen for debug logging
+    // Split the screen.
+    // Top for statistics and bottom half for debug logging
     constexpr int32_t reserveHeight = TFT_HEIGHT / 2;
     #else
     constexpr int32_t reserveHeight = 0;
     #endif
 
-    size_t i = chView - 1;
-    uint32_t bps = get_bps();
-    static size_t last_i = SIZE_MAX;
-    // const int32_t tweak = -2;
+    const uint32_t bps = get_bps();
     const uint8_t font = GFXFF;
     const int32_t lines = 7;
+    const size_t i = chView - 1;
+    static size_t last_i = SIZE_MAX; // any initial value out of range of "chView - 1"
     tft.setFreeFont(FSS9);
 
     int32_t xPos = 0;
-    int32_t h = tft.fontHeight(GFXFF);
-    int32_t gap = (kMaxHeight - reserveHeight - lines * h) / (lines + 1);
-    const int32_t top = (gap + h) / 2;
+    const int32_t h = tft.fontHeight(GFXFF);
+    // This looks good on T-HMI, TODO test with the other boards
+    const int32_t gap = (kMaxHeight - reserveHeight - lines * h) / (lines + 1);
+    const int32_t top = (kMaxHeight - reserveHeight - (gap * (lines - 1) + h * lines)) / 2;
+    /*
+      For the T-Display-S3 at 7 lines, this is top=2, gap=2, h=22 (display Height 170)
+      For the T-HMI at 7 lines, this is top=3, gap=0, h=22 (split display height 160)
+    */
     int32_t yPos = top;
-    int32_t sz = 0;
 
     tft.setTextColor(TFT_BROWN, TFT_BLACK);
+    #if 0
+    // used to verify margins
+    int32_t y = 0;
+    tft.drawLine(0, y, kMaxX, y, TFT_BROWN);
+    y = reserveHeight - 1;
+    tft.drawLine(0, y, kMaxX, y, TFT_BROWN);
+    #endif
 
     if (i != last_i) {
         tft.setTextDatum(TL_DATUM);
         tft.setFreeFont(FSS9);
+        tft.setTextPadding(kMaxWidth / 2);
         tft.drawString("Channel", xPos, yPos, font);
         yPos += h + gap;
         tft.drawString("MGMT", xPos, yPos, font);
@@ -1141,8 +1153,9 @@ void updateScreen(size_t chView) {
         tft.drawString("CTRL", xPos, yPos, font);
         yPos += h + gap;
         tft.drawString("DATA", xPos, yPos, font);
-        yPos += h + gap;
+        // yPos += h + gap;
         // tft.drawString("ERROR", xPos, yPos, font);
+        yPos += h + gap;
         tft.drawString("KBPS", xPos, yPos, font);
         yPos += h + gap;
         tft.drawString("Dropped", xPos, yPos, font);
@@ -1152,26 +1165,21 @@ void updateScreen(size_t chView) {
 
     tft.setTextDatum(TR_DATUM);
     tft.setFreeFont(FSS9);
-    const int32_t xStart = kMaxWidth/2;
+    tft.setTextPadding(kMaxWidth / 2);
     xPos = kMaxX;
     yPos = top;
-    //D yPos = gap;
     if (i != last_i) {
-        tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
         tft.drawString(String(chView), xPos, yPos, font);
     }
     yPos += h + gap;
-    tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
     tft.drawString(String(cs[i].mgmt), xPos, yPos, font);
     yPos += h + gap;
-    tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
     tft.drawString(String(cs[i].ctrl), xPos, yPos, font);
     yPos += h + gap;
-    tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
     tft.drawString(String(cs[i].data), xPos, yPos, font);
-    yPos += h + gap;
-    tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
+    // yPos += h + gap;
     // tft.drawString(String(cs[i].error), xPos, yPos, font);
+    yPos += h + gap;
     {
         char buf[32];
         snprintf(buf, sizeof(buf), "%04u", bps);
@@ -1184,10 +1192,8 @@ void updateScreen(size_t chView) {
         tft.drawString(String(buf), xPos, yPos, font);
     }
     yPos += h + gap;
-    tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
     tft.drawString(String(cs[i].dropped), xPos, yPos, font);
     yPos += h + gap;
-    tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
     tft.drawString(String(cs[i].total), xPos, yPos, font);
     last_i = i;
 
@@ -1199,26 +1205,27 @@ void updateScreen(const size_t chView) {
     if (0 != screen.select) return;
 
     size_t i = chView - 1;
-    uint32_t bps = get_bps();
+    const uint32_t bps = get_bps();
     const uint8_t font = GFXFF;
     const int32_t lines = 3;
     tft.setFreeFont(FSS9);
 
     int32_t xPos = 0;
-    int32_t h = tft.fontHeight(GFXFF);
-    int32_t gap = (kMaxHeight - lines * h) / lines;
+    const int32_t h = tft.fontHeight(GFXFF);
+    const int32_t gap = (kMaxHeight - lines * h) / lines;
 
-    // Put lines dropped via rounding at top
+    // Put "pixel lines" dropped via rounding at top
     #if 0
-    ssize_t top = kMaxHeight - lines * h - (lines - 1) * gap - 2 * (gap / 2);
+    int32_t top = kMaxHeight - lines * h - (lines - 1) * gap - 2 * (gap / 2);
     if (0 > top) top = 0;
     top += gap / 2;
+    #elif 0
+    const int32_t top = (kMaxHeight - (gap * (lines - 1) + h * lines)) / 2;
     #else
-    size_t top = 5;
+    int32_t top = 5;
     #endif
 
     int32_t yPos = top;
-    int32_t sz = 0;
 
     tft.setTextColor(TFT_BROWN, TFT_BLACK);
 
@@ -1237,18 +1244,16 @@ void updateScreen(const size_t chView) {
     tft.setTextDatum(TR_DATUM);
     tft.setFreeFont(FSS9);
     const int32_t xStart = kMaxWidth/2;
+    tft.setTextPadding(kMaxX - xStart);
     xPos = kMaxX;
     yPos = top;
     if (screen.refresh) {
-        tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
         tft.drawString(String(chView), xPos, yPos, font);
     }
     yPos += h + gap;
-    tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
     tft.drawString(String(cs[i].dropped), xPos, yPos, font);
     // tft.drawString(String(not_the_one), xPos, yPos, font);
     yPos += h + gap;
-    tft.fillRect(xStart, yPos, (kMaxX - xStart) - sz, h, TFT_BLACK);
     // tft.drawString(String(cs[i].total), xPos, yPos, font);
     {
         char buf[32];

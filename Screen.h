@@ -21,14 +21,6 @@ struct ScreenState {
 };
 extern ScreenState screen;
 
-
-struct ScrollLock {
-    volatile uint32_t lock;
-    volatile uint32_t locked_count;
-};
-
-extern ScrollLock scroll_lock;
-
 bool screenAcquire();
 void screenRelease();
 
@@ -85,6 +77,7 @@ static inline void selectScreen([[maybe_unused]] const size_t select) {}
 static inline void toggleScreen(void) {}
 static inline bool screenAcquire(void) { return true; }
 static inline void scrollRelease(void) {}
+#define LCDPost(fmt, ...)
 #endif // #if ARDUINO_LILYGO_T_DISPLAY_S3 || ARDUINO_LILYGO_T_DONGLE_S3 || ARDUINO_LILYGO_T_HMI
 
 

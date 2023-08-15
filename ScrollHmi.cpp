@@ -197,6 +197,9 @@ void scrollStrWrite(const char *str) {
   // Release lock
   screenRelease();
 }
+void scrollStreamStringWrite(const StreamString& ss) {
+  return scrollStrWrite(ss.c_str());
+}
 
 // ##############################################################################################
 // Call this function to scroll the display one text line
@@ -214,7 +217,10 @@ int scroll_line(uint16_t xLastPos) {
   scroll.yStart += TEXT_HEIGHT;
 
   // The value must wrap around as the screen memory is a circular buffer
-  if (scroll.yStart >= YMAX - BOT_FIXED_AREA) scroll.yStart = TOP_FIXED_AREA; //?? TOP_FIXED_AREA + (yStart - YMAX + BOT_FIXED_AREA);
+  if (scroll.yStart >= YMAX - BOT_FIXED_AREA) {
+    //+ scroll.yStart = TOP_FIXED_AREA; //Requires TEXT_HEIGHT multiple of ??
+    scroll.yStart = TOP_FIXED_AREA + (scroll.yStart - YMAX + BOT_FIXED_AREA);
+  }
 
   // Now we can scroll the display
   scrollAddress(scroll.yStart);
