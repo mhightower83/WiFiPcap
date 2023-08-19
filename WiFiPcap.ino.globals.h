@@ -11,10 +11,13 @@
 // // Update this path to point into your Sketch folder ./src/T-Display-S3/
 // -I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-Display-S3/"
 
-// -DARDUINO_LILYGO_T_HMI=1
-// // This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
-// // Update this path to point into your Sketch folder ./src/T-Display-S3/
-// -I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-HMI/"
+-DARDUINO_LILYGO_T_HMI=1
+// This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
+// Update this path to point into your Sketch folder ./src/T-Display-S3/
+-I"/home/userid/Arduino/ESPs/WiFiPcap/src/T-HMI/"
+//
+// Cause ESP_LOGI prints to always print
+-DRELEASE_BUILD=0
 
 // -DARDUINO_LILYGO_T_DONGLE_S3=1
 // // This is needed for TFT_eSPI to find the Hardware matching tft_setup.h file
@@ -49,6 +52,11 @@
 #error "Both ARDUINO_LILYGO_T_DISPLAY_S3 and ARDUINO_LILYGO_T_DONGLE_S3 are defined"
 #endif
 
+// When PSRAM is available "k_auth_cache_size" (SerialPcap.h) sets the upper
+// limit of how much PSRAM will be used to buffer Authentication packets.
+// Otherwise, "USE_DRAM_CACHE" will define how much DRAM should be allocated for
+// this purpose.
+
 #if ARDUINO_LILYGO_T_DONGLE_S3
 /*
 Using LilyGo T-Dongle-S3
@@ -62,6 +70,8 @@ Build with Tools selection:              (defines set)
   PSRAM: "disabled"                      none
 */
 #define USE_DRAM_CACHE (32*1024)
+
+#defined USE_TFCARD 0
 
 // Has hardware support for Micro SDCard, but with the current Arduino Core USB
 // is unstable with this option. The Last time I tested it does not matter if
@@ -80,6 +90,8 @@ Build with Tools selection:              (defines set)
   Flash Size: "16MB (128Mb)"
   PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
 */
+
+#define USE_LONG_STATISTICS 1
 #define USE_USB_MSC 0
 
 #elif ARDUINO_LILYGO_T_HMI
@@ -95,10 +107,25 @@ Build with Tools selection:              (defines set)
   PSRAM: "OPI PSRAM"                     -DBOARD_HAS_PSRAM
 */
 
+#define USE_TFCARD 0
+
+// For T-HMI, changes the ratio of statistics to log area
+#define USE_LONG_STATISTICS 1
+
 // Has hardware support for Micro SDCard, but with the current Arduino Core USB
 // is unstable with this option. The Last time I tested it does not matter if
 // the SDCard was connected or not. The ttyACM0 will go off line at some point.
 // #define USE_USB_MSC 1
+
+// Note, hardware scrolling is only supported in Portrait mode.
+// "SCREEN_TOP_FIXED_AREA" defines the number of pixel lines occupied by the top
+// screen area which does not scroll, fixed.
+#if USE_LONG_STATISTICS
+#define SCREEN_TOP_FIXED_AREA (TFT_HEIGHT / 2)
+#else
+#define SCREEN_TOP_FIXED_AREA (TFT_HEIGHT - 16 * 15) // top area lines will overlap
+// #define SCREEN_TOP_FIXED_AREA (TFT_HEIGHT - TFT_HEIGHT / 4)
+#endif
 
 #else
 /*
@@ -119,6 +146,19 @@ Build with Tools selection:              (defines set)
 // Build support for USB MSC, supports TFCard slot on the LilyGo T-Dongle-S3
 #ifndef USE_USB_MSC
 #define USE_USB_MSC 0
+#endif
+
+// Build support for ESP32 private access to TFCard slot. No USB Host access.
+#ifndef USE_TFCARD
+#define USE_TFCARD 0
+#endif
+
+#ifndef USE_LONG_STATISTICS
+#define USE_LONG_STATISTICS 0
+#endif
+
+#if USE_USB_MSC && USE_TFCARD
+#error "USE_USB_MSC and USE_TFCARD are mutually exclissive options."
 #endif
 
 // Default pre-filter if never set by python script. Intended to capture a WiFi

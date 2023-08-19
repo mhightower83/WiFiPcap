@@ -73,8 +73,11 @@ static inline void * interlocked_exchange(volatile void **addr, void* const newv
         : "memory");
         return oldval;
 }
+static inline uint32_t interlocked_exchange(volatile uint32_t *addr, uint32_t newval) {
+    return (uint32_t)interlocked_exchange((volatile void **)addr, (void*)newval);
+}
 
-// Untested - WIP - don't need this yet
+// // Untested - WIP - don't need this yet
 // static inline void * interlocked_add(volatile void **addr, volatile void **valaddr) {
 //     void* oldval;
 //     void* newval;
@@ -90,6 +93,9 @@ static inline void * interlocked_exchange(volatile void **addr, void* const newv
 //         : [addr]"a"(addr), [valaddr]"a"(valaddr)
 //         : "memory");
 //         return newval;
+// }
+// static inline uint32_t interlocked_add(volatile uint32_t *addr, const uint32_t *val) {
+//   return (uint32_t)interlocked_add((volatile void **)addr, (void**)val);
 // }
 
 // Status - not heavly test, but seems to work

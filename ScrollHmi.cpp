@@ -78,8 +78,11 @@ constexpr int colstart = 0;
 extern TFT_eSPI tft; // = TFT_eSPI(TFT_WIDTH, TFT_HEIGHT);   // 135 (+105 dead space) X 240 (+40 +40 Dead space at top and bottom)
 
 // Keep thw title at the top
-// #define TOP_FIXED_AREA 16 // Number of lines in top fixed area (lines counted from top of screen)
-#define TOP_FIXED_AREA (TFT_HEIGHT / 2) // Number of lines in top fixed area (lines counted from top of screen)
+// #define SCREEN_TOP_FIXED_AREA 16 // Number of lines in top fixed area (lines counted from top of screen)
+// #define SCREEN_TOP_FIXED_AREA (TFT_HEIGHT / 2) // Number of lines in top fixed area (lines counted from top of screen)
+#ifndef SCREEN_TOP_FIXED_AREA
+#error ("SCREEN_TOP_FIXED_AREA define required in Sketch.ino.globals.h")
+#endif
 #define YMAX 320          // Bottom of screen area - our screen only goes to 240; however, the display chip thinks it is 320.
                           // For scrowl to work TFA + VSA + BFA must = 320
 
@@ -99,16 +102,16 @@ constexpr uint16_t xMax = TFT_WIDTH;
 constexpr bool overStrike = false;    // esoteric printing terminal behavior TFT libary does not or bits remove later
 
 // Lines on display that will scroll
-// constexpr ssize_t max_lines = (YMAX - TOP_FIXED_AREA - BOT_FIXED_AREA) / TEXT_HEIGHT;
-constexpr ssize_t max_lines = (YMAX - TOP_FIXED_AREA - BOT_FIXED_AREA) / TEXT_HEIGHT;
+// constexpr ssize_t max_lines = (YMAX - SCREEN_TOP_FIXED_AREA - BOT_FIXED_AREA) / TEXT_HEIGHT;
+constexpr ssize_t max_lines = (YMAX - SCREEN_TOP_FIXED_AREA - BOT_FIXED_AREA) / TEXT_HEIGHT;
 
 // constexpr ssize_t max_lines = BOT_FIXED_AREA / TEXT_HEIGHT;
 static_assert(0 < max_lines, "TFT Scroll: max lines error - check boundary definitions");
-static_assert(0 == (YMAX - TOP_FIXED_AREA - BOT_FIXED_AREA) % TEXT_HEIGHT, "TFT Scroll: scrolling area must be a integral multiple of TEXT_HEIGHT");
+static_assert(0 == (YMAX - SCREEN_TOP_FIXED_AREA - BOT_FIXED_AREA) % TEXT_HEIGHT, "TFT Scroll: scrolling area must be a integral multiple of TEXT_HEIGHT");
 
 struct Scroll7789 {
     // The initial y coordinate of the top of the scrolling area
-    uint16_t yStart = TOP_FIXED_AREA;
+    uint16_t yStart = SCREEN_TOP_FIXED_AREA;
 
     // The initial y coordinate of the top of the bottom text line
     uint16_t yDraw = YMAX - BOT_FIXED_AREA - TEXT_HEIGHT;
@@ -133,23 +136,36 @@ struct Scroll7789 {
 
 void scrollSetup() {
 
-  setupScrollArea(TOP_FIXED_AREA, BOT_FIXED_AREA);
+  setupScrollArea(SCREEN_TOP_FIXED_AREA, BOT_FIXED_AREA);
 
   // Zero the array
   for (byte i = 0; i < max_lines; i++) scroll.blank[i] = 0;
 }
 
-void scrollStrWrite(const char *str) {
-  // if (NULL == scroll.blank || NULL == str) return;
-  // There is a risk with reentrancy - add guard until print method is refactored to address.
-  // Acquire Lock
-  if (! screenAcquire()) {
-    return;
-  }
 
+static void scrollStrWrite(const char *str) {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   while (*str > 0) {
-    byte data = *str; str++;
+    byte data = *str++;
+    if (ESC == data) {
+      data = *str++;
+      if ('R' == data) {
+        tft.setTextColor(TFT_BLACK, TFT_RED);
+        data = *str++;
+      } else
+      if ('L' == data) {
+        tft.setTextColor(TFT_WHITE, TFT_BLUE);
+        data = *str++;
+      } else
+      if ('Y' == data) {
+        tft.setTextColor(TFT_BLACK, TFT_YELLOW);
+        data = *str++;
+      } else
+      if ('G' == data) {
+        tft.setTextColor(TFT_BLACK, TFT_GREEN);
+        data = *str++;
+      }
+    }
     /*
       A chacter printing past xMax pixel will get wrapped to the next line
       NL without CR will perform CR
@@ -177,7 +193,7 @@ void scrollStrWrite(const char *str) {
         }
         if (!overStrike && scroll.xPosMax && 0 == scroll.xPos) {
           // We had a return without a newline. Optional, if not doing overstrike, clear line.
-          auto endOfLine = scroll.blank[(max_lines-1 + (scroll.yStart - TOP_FIXED_AREA) / TEXT_HEIGHT) % max_lines];
+          auto endOfLine = scroll.blank[(max_lines-1 + (scroll.yStart - SCREEN_TOP_FIXED_AREA) / TEXT_HEIGHT) % max_lines];
           tft.fillRect(scroll.xPos, scroll.yDraw, endOfLine, TEXT_HEIGHT, TFT_BLACK);
         }
         uint16_t xPosLast = scroll.xPos;
@@ -193,33 +209,63 @@ void scrollStrWrite(const char *str) {
       }
     }
   } // while (*str > 0) {
+}
 
-  // Release lock
-  screenRelease();
+
+void scrollStreamStringWrite(StreamString* ss) {
+  // There is a risk with reentrancy.
+  // Not an exhaustive solution; however, it should be good enough for a
+  // seldom occuring event. We can buffer one concurent call to display a
+  // message. I think it is still possible to drop one if printing from both
+  // cores and an interrupt occurs and tries to print.
+  if (screenAcquire()) {
+    scrollStrWrite(ss->c_str());
+    delete ss;
+    StreamString* msg;
+    while ((msg = (StreamString*)interlocked_exchange((volatile void**)&screen.msg, NULL))) {
+      scrollStrWrite(msg->c_str());
+      delete msg;
+    }
+    uint32_t dropped = interlocked_read(&screen.dropped);
+    // There is a window here for dropped to be incremented before the exchange.
+    // It is also possible for a new print to fail while performing this notice;
+    // however, this is okay, we just needed to let the user know some messages
+    // were lost.
+    uint32_t dropped_last = interlocked_exchange(&screen.dropped_last, dropped);
+    if (dropped != dropped_last) {
+      scrollStrWrite("\x1bR" "\r...\r\n");  // used to signify lost prints
+    }
+    screenRelease();
+  } else {
+    interlocked_add(&screen.buffered, 1u);;
+    StreamString* dropped = (StreamString*)interlocked_exchange((volatile void**)&screen.msg, ss);
+    if (dropped) {
+      delete dropped;
+      interlocked_add(&screen.dropped, 1u);
+    }
+  }
 }
-void scrollStreamStringWrite(const StreamString& ss) {
-  return scrollStrWrite(ss.c_str());
-}
+
 
 // ##############################################################################################
 // Call this function to scroll the display one text line
 // ##############################################################################################
 int scroll_line(uint16_t xLastPos) {
   // Save for optomized erase end-of-line
-  scroll.blank[(max_lines-1 + (scroll.yStart - TOP_FIXED_AREA) / TEXT_HEIGHT) % max_lines] = xLastPos;
+  scroll.blank[(max_lines-1 + (scroll.yStart - SCREEN_TOP_FIXED_AREA) / TEXT_HEIGHT) % max_lines] = xLastPos;
 
   int yTemp = scroll.yStart; // Store the old yStart, this is where we draw the next line
 
   // Use the record of line lengths to optimise the rectangle size we need to erase the top line
-  tft.fillRect(0, scroll.yStart, scroll.blank[(scroll.yStart - TOP_FIXED_AREA) / TEXT_HEIGHT], TEXT_HEIGHT, TFT_BLACK);
+  tft.fillRect(0, scroll.yStart, scroll.blank[(scroll.yStart - SCREEN_TOP_FIXED_AREA) / TEXT_HEIGHT], TEXT_HEIGHT, TFT_BLACK);
 
   // Change the top of the scroll area
   scroll.yStart += TEXT_HEIGHT;
 
   // The value must wrap around as the screen memory is a circular buffer
   if (scroll.yStart >= YMAX - BOT_FIXED_AREA) {
-    //+ scroll.yStart = TOP_FIXED_AREA; //Requires TEXT_HEIGHT multiple of ??
-    scroll.yStart = TOP_FIXED_AREA + (scroll.yStart - YMAX + BOT_FIXED_AREA);
+    //+ scroll.yStart = SCREEN_TOP_FIXED_AREA; //Requires TEXT_HEIGHT multiple of ??
+    scroll.yStart = SCREEN_TOP_FIXED_AREA + (scroll.yStart - YMAX + BOT_FIXED_AREA);
   }
 
   // Now we can scroll the display

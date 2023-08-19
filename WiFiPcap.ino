@@ -207,6 +207,7 @@ enum Orientation {
 #elif ARDUINO_LILYGO_T_HMI
 #include <SPI.h>
 #include <xpt2046.h>
+void sd_init();
 
 #elif ARDUINO_LILYGO_T_DONGLE_S3
 #include <SPI.h>
@@ -797,10 +798,15 @@ void setup() {
     digitalWrite(PIN_TOUCH_RES, LOW);
     delay(500);
     digitalWrite(PIN_TOUCH_RES, HIGH);
+    screenInit(kMaxHeight, kMaxHeight);
 
 #elif ARDUINO_LILYGO_T_HMI
     pinMode(PWR_EN_PIN, OUTPUT);
     digitalWrite(PWR_EN_PIN, HIGH);
+    screenInit(kMaxHeight, SCREEN_TOP_FIXED_AREA);
+
+#elif ARDUINO_LILYGO_T_DONGLE_S3
+    screenInit(kMaxHeight, kMaxHeight);
 #endif
 
     HWSerial.begin(115200);
@@ -915,8 +921,10 @@ void setup() {
 #endif
 #if ARDUINO_LILYGO_T_HMI
     scrollSetup();
+    screenRelease();
     // Change color for scrolling zone text
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    sd_init();
 #endif
 
 #if ARDUINO_LILYGO_T_DISPLAY_S3
@@ -951,9 +959,6 @@ void setup() {
     screen.saver_time =
     screen.dim_time = millis();
     screen.dim = kLcdBLMaxLevel;
-    screen.on = true;
-    screen.lock = 0;
-    screen.locked_count = 0;
 #endif //  USE_DISPLAY
     wifi_promis_init();
 
@@ -1107,26 +1112,27 @@ void updateScreen(size_t chView) {
     if (0 != screen.select) return;
     if (! screenAcquire()) return;
 
-    #if ARDUINO_LILYGO_T_HMI
-    // Split the screen.
-    // Top for statistics and bottom half for debug logging
-    constexpr int32_t reserveHeight = TFT_HEIGHT / 2;
-    #else
-    constexpr int32_t reserveHeight = 0;
-    #endif
-
+    const int32_t top_fixed_area = screen.top_area;
     const uint32_t bps = get_bps();
     const uint8_t font = GFXFF;
+    #if USE_LONG_STATISTICS
     const int32_t lines = 7;
+    #else
+    const int32_t lines = 4;
+    #endif
     const size_t i = chView - 1;
     static size_t last_i = SIZE_MAX; // any initial value out of range of "chView - 1"
     tft.setFreeFont(FSS9);
 
     int32_t xPos = 0;
     const int32_t h = tft.fontHeight(GFXFF);
-    // This looks good on T-HMI, TODO test with the other boards
-    const int32_t gap = (kMaxHeight - reserveHeight - lines * h) / (lines + 1);
-    const int32_t top = (kMaxHeight - reserveHeight - (gap * (lines - 1) + h * lines)) / 2;
+    int32_t gap = (top_fixed_area - lines * h) / (lines + 1);
+    int32_t top = (top_fixed_area - (gap * (lines - 1) + h * lines)) / 2;
+    if (0 > top) {
+      // Lines must overlap to fit within the space allowed
+      top = 0;
+      gap = (top_fixed_area - lines * h) / (lines - 1);
+    }
     /*
       For the T-Display-S3 at 7 lines, this is top=2, gap=2, h=22 (display Height 170)
       For the T-HMI at 7 lines, this is top=3, gap=0, h=22 (split display height 160)
@@ -1148,19 +1154,21 @@ void updateScreen(size_t chView) {
         tft.setTextPadding(kMaxWidth / 2);
         tft.drawString("Channel", xPos, yPos, font);
         yPos += h + gap;
-        tft.drawString("MGMT", xPos, yPos, font);
+        tft.drawString("KBPS", xPos, yPos, font);
         yPos += h + gap;
-        tft.drawString("CTRL", xPos, yPos, font);
-        yPos += h + gap;
-        tft.drawString("DATA", xPos, yPos, font);
+        tft.drawString("TOTAL", xPos, yPos, font);
         // yPos += h + gap;
         // tft.drawString("ERROR", xPos, yPos, font);
         yPos += h + gap;
-        tft.drawString("KBPS", xPos, yPos, font);
-        yPos += h + gap;
         tft.drawString("Dropped", xPos, yPos, font);
+#if USE_LONG_STATISTICS
         yPos += h + gap;
-        tft.drawString("TOTAL", xPos, yPos, font);
+        tft.drawString("DATA", xPos, yPos, font);
+        yPos += h + gap;
+        tft.drawString("MGMT", xPos, yPos, font);
+        yPos += h + gap;
+        tft.drawString("CTRL", xPos, yPos, font);
+#endif
     }
 
     tft.setTextDatum(TR_DATUM);
@@ -1172,29 +1180,35 @@ void updateScreen(size_t chView) {
         tft.drawString(String(chView), xPos, yPos, font);
     }
     yPos += h + gap;
-    tft.drawString(String(cs[i].mgmt), xPos, yPos, font);
-    yPos += h + gap;
-    tft.drawString(String(cs[i].ctrl), xPos, yPos, font);
-    yPos += h + gap;
-    tft.drawString(String(cs[i].data), xPos, yPos, font);
-    // yPos += h + gap;
-    // tft.drawString(String(cs[i].error), xPos, yPos, font);
-    yPos += h + gap;
+    #if 0
     {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%04u", bps);
-        buf[sizeof(buf)-1] = '\0';
-        size_t sz = strlen(buf);
-        if (sz < sizeof(buf) - 2) {
+        char buf[32] = {0};
+        int sz = snprintf(buf, sizeof(buf), "%04u", bps);
+        if (0 < sz && sz <= sizeof(buf) -2) {
             memmove(&buf[sz - 2], &buf[sz - 3], 3);
             buf[sz - 3] = '.';
         }
         tft.drawString(String(buf), xPos, yPos, font);
     }
-    yPos += h + gap;
-    tft.drawString(String(cs[i].dropped), xPos, yPos, font);
+    #else
+    // I am undecided about bringing in the float library. This is the only
+    // place I know, that causes the float library to load.
+    tft.drawString(String((bps / 1000.), 3), xPos, yPos, font);
+    #endif
     yPos += h + gap;
     tft.drawString(String(cs[i].total), xPos, yPos, font);
+    // yPos += h + gap;
+    // tft.drawString(String(cs[i].error), xPos, yPos, font);
+    yPos += h + gap;
+    tft.drawString(String(cs[i].dropped), xPos, yPos, font);
+#if USE_LONG_STATISTICS
+    yPos += h + gap;
+    tft.drawString(String(cs[i].data), xPos, yPos, font);
+    yPos += h + gap;
+    tft.drawString(String(cs[i].mgmt), xPos, yPos, font);
+    yPos += h + gap;
+    tft.drawString(String(cs[i].ctrl), xPos, yPos, font);
+#endif
     last_i = i;
 
     screenRelease();
@@ -1234,11 +1248,10 @@ void updateScreen(const size_t chView) {
         tft.setFreeFont(FSS9);
         tft.drawString("Channel", xPos, yPos, font);
         yPos += h + gap;
-        tft.drawString("Dropped", xPos, yPos, font);
-        // tft.drawString("Line", xPos, yPos, font);
+        tft.drawString("kbps", xPos, yPos, font);
         yPos += h + gap;
         // tft.drawString("TOTAL", xPos, yPos, font);
-        tft.drawString("kbps", xPos, yPos, font);
+        tft.drawString("Dropped", xPos, yPos, font);
     }
 
     tft.setTextDatum(TR_DATUM);
@@ -1251,21 +1264,21 @@ void updateScreen(const size_t chView) {
         tft.drawString(String(chView), xPos, yPos, font);
     }
     yPos += h + gap;
-    tft.drawString(String(cs[i].dropped), xPos, yPos, font);
-    // tft.drawString(String(not_the_one), xPos, yPos, font);
-    yPos += h + gap;
-    // tft.drawString(String(cs[i].total), xPos, yPos, font);
+    #if 0
     {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%04u", bps);
-        buf[sizeof(buf)-1] = '\0';
-        size_t sz = strlen(buf);
-        if (sz < sizeof(buf) - 2) {
+        char buf[32] = {0};
+        int sz = snprintf(buf, sizeof(buf), "%04u", bps);
+        if (0 < sz && sz <= sizeof(buf) -2) {
             memmove(&buf[sz - 2], &buf[sz - 3], 3);
             buf[sz - 3] = '.';
         }
         tft.drawString(String(buf), xPos, yPos, font);
     }
-    screen.refresh = false;
+    #else
+    tft.drawString(String((bps / 1000.), 3), xPos, yPos, font);
+    #endif
+    yPos += h + gap;
+    // tft.drawString(String(cs[i].total), xPos, yPos, font);
+    tft.drawString(String(cs[i].dropped), xPos, yPos, font);    screen.refresh = false;
 }
 #endif

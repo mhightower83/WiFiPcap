@@ -474,7 +474,7 @@ static esp_err_t prologue(SerialTask *session, const WiFiPcap *ts_ref) {
             count++;
         }
         // Side note, Wireshark does not expect a header with zero length payload
-        ESP_LOGE(TAG, "prologue() posted %u packets", count);
+        ESP_LOGI(TAG, "prologue() posted %u packets", count);
     }
     return ESP_OK;
 }
@@ -957,6 +957,9 @@ esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter) {
     }
 #if defined(BOARD_HAS_PSRAM) || defined(USE_DRAM_CACHE)
     cust_fltr.cache_auth_count = 0;
+    // If you change this and try to use all of available SPIRAM, ps_malloc will
+    // fail. Apparently, some amount of memory needs to be left behind for
+    // malloc overhead.
     size_t sz = std::min(k_auth_cache_size, heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     if (sz) {
         cust_fltr.cache_auth = (uintptr_t)ps_malloc(sz);
@@ -969,12 +972,12 @@ esp_err_t serial_pcap_start(SERIAL_INF* pcapSerial, bool init_custom_filter) {
     cust_fltr.cache_end = cust_fltr.cache_auth;
     if (cust_fltr.cache_auth) {
         cust_fltr.cache_end += sz;
+        ESP_LOGI(TAG, "Cache AUTH 0x%08X = malloc(%u) success", cust_fltr.cache_auth, sz);
     } else {
         ESP_LOGE(TAG, "Cache AUTH malloc(%u) failed!", sz);
         // Let the system start without the Cache
         // return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "Cache AUTH 0x%08X = malloc(%u) success", cust_fltr.cache_auth, sz);
 #else
     cust_fltr.cache_auth_count =
     cust_fltr.cache_auth =

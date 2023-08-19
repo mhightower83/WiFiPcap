@@ -83,6 +83,12 @@ extern "C" {
 #endif
 
 constexpr uint32_t k_serial_timeout = 500u;  // ms
+
+/*
+  The amount of PSRAM used for authentication packet caching. It could be made
+  larger. For now limit to 1M, in case we add an option, to capture packets to
+  PSRAM.
+*/
 constexpr size_t k_auth_cache_size = 1u * 1024u * 1024u;
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -10,30 +10,33 @@ extern TFT_eSPI tft; // = TFT_eSPI(TFT_WIDTH, TFT_HEIGHT);   // 135 (+105 dead s
 #include <StreamString.h>
 #include "Screen.h"
 
+constexpr byte ESC = 0x1Bu;
+
 #undef ESP_LOGE
 #undef ESP_LOGI
 
-// Errors take control of display
+// Red background for Errors, ESC R
 #define ESP_LOGE(t, fmt, ...) \
   do { \
-    StreamString log; \
-    log.printf("%s: " fmt "\n", t, ##__VA_ARGS__); \
+    StreamString* log = new StreamString(); \
+    log->printf("\x1bR" "%s: " fmt "\n", t, ##__VA_ARGS__); \
     scrollStreamStringWrite(log); \
   } while(false)
 
-// LCDPost and Infos use display if selected/available
+// LCDPost and Infos use display if ??selected/available??
+// Blue background, ESC L
 #define ESP_LOGI(t, fmt, ...) \
   do { \
-    StreamString log; \
-    log.printf("%s: " fmt "\n", t, ##__VA_ARGS__); \
+    StreamString* log = new StreamString(); \
+    log->printf("\x1bL" "%s: " fmt "\n", t, ##__VA_ARGS__); \
     scrollStreamStringWrite(log); \
   } while(false)
 
 //
 #define LCDPost(fmt, ...) \
   do { \
-    StreamString log; \
-    log.printf("%s: " fmt "\n", TAG, ##__VA_ARGS__); \
+    StreamString* log = new StreamString(); \
+    log->printf("%s: " fmt "\n", TAG, ##__VA_ARGS__); \
     scrollStreamStringWrite(log); \
   } while(false)
 #endif
@@ -42,8 +45,7 @@ extern TFT_eSPI tft; // = TFT_eSPI(TFT_WIDTH, TFT_HEIGHT);   // 135 (+105 dead s
 // setupScroll(TOP_FIXED_AREA, BOT_FIXED_AREA)
 // void scrollSetup(uint16_t tfa, uint16_t bfa);
 void scrollSetup();
-void scrollStrWrite(const char *str);
-void scrollStreamStringWrite(const StreamString& ss);
+void scrollStreamStringWrite(StreamString* ss);
 bool scrollAquire();
 void scrollRelease();
 

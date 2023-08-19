@@ -7,14 +7,20 @@
 //
 #include <TFT_eSPI.h>
 #include "src/Free_Fonts.h"
+#include <StreamString.h>
 
 extern TFT_eSPI tft;
 struct ScreenState {
   volatile uint32_t lock;
-  volatile uint32_t locked_count;
+  volatile uint32_t dropped;
+  volatile uint32_t dropped_last;
+  volatile uint32_t buffered;
+  volatile StreamString* msg;
   uint32_t saver_time;
   uint32_t dim_time;
   int32_t  dim;
+  int32_t  height;
+  int32_t  top_area;
   bool     on;
   bool     refresh = true;
   uint32_t select = 0;
@@ -23,6 +29,16 @@ extern ScreenState screen;
 
 bool screenAcquire();
 void screenRelease();
+static inline void screenInit(const int height, const int topArea) {
+  screen.on = true;
+  screen.lock = 1u;       // start in locked state
+  screen.dropped_last =
+  screen.dropped =
+  screen.buffered = 0;
+  screen.height = height;
+  screen.top_area = topArea; // also is the pixel line address of 2nd area
+}
+
 
 #if ARDUINO_LILYGO_T_DISPLAY_S3 || ARDUINO_LILYGO_T_DONGLE_S3
 void refreshScreen();
@@ -61,6 +77,8 @@ void selectScreen(const size_t select);
   }
 
 #elif ARDUINO_LILYGO_T_HMI
+// On LilyGo T-TMI, we have enough screen area to split the screen in half,
+// top for statistics and bottom for logging.
 #include "ScrollHmi.h"
 
 #elif ARDUINO_LILYGO_T_DISPLAY_S3
